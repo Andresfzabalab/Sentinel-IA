@@ -1,81 +1,54 @@
 # SentinelAI
 
-> **Intelligent Application Security Review Platform**
+**AI-Assisted Application Security Platform for Pull Request Analysis**
 
-## Vision
+SentinelAI is a vendor-agnostic security platform that integrates into the software development lifecycle at the Pull Request level. It analyzes code changes, infrastructure definitions, container configurations, dependency manifests, and pipeline definitions to identify security issues before they reach production.
 
-SentinelAI is an AI-powered SaaS platform designed to improve
-application security by analyzing Pull Requests before code reaches
-production.
+Unlike traditional SAST-only tools, SentinelAI treats a Pull Request as a collection of heterogeneous artifacts — each requiring a different security analysis strategy. It orchestrates multiple specialized scanners, correlates their findings, and uses AI reasoning to deduplicate, prioritize, explain, and recommend remediations.
 
-Instead of relying on a single security scanner or language model,
-SentinelAI orchestrates multiple specialized security engines (SAST,
-SCA, Secret Scanning, Infrastructure as Code analysis, Container
-Security, Pipeline Security and future DAST capabilities) and combines
-their findings through an intelligent reasoning engine.
+## What This Project Is
 
-The platform provides contextual risk analysis, explains vulnerabilities
-in natural language, recommends secure remediations and integrates
-directly into the software development lifecycle.
+An independent engineering project developed, researched, and maintained by one engineer following professional engineering practices. It is designed as a production-grade SaaS platform, not a prototype or proof of concept.
 
-## Mission
+## Current Phase
 
-Build an extensible, vendor-agnostic Application Security platform
-capable of helping development teams deliver secure software through
-automated, contextual and explainable security reviews.
+**Phase 0.5 — Engineering Foundation**
 
-## Long-term Goals
+The project is in its documentation and architecture design phase. No implementation code exists yet. The goal is to fully define what we are building, why, how it will work, what technologies we need, and how it will evolve — before writing any application code.
 
--   Analyze Pull Requests automatically.
--   Support multiple Git providers.
--   Support multiple AI providers.
--   Remain independent of any specific scanner.
--   Provide explainable security recommendations.
--   Generate enterprise-grade reports.
--   Become a modular AppSec platform ready for SaaS deployment.
+## Documentation
 
-## Core Principles
+All project documentation lives under `docs/` and is organized by concern:
 
--   Product-first mindset.
--   Clean and maintainable architecture.
--   Domain-Driven Design.
--   Hexagonal Architecture.
--   Security by Design.
--   Vendor independence.
--   Automation first.
--   Documentation as a first-class artifact.
--   Testability and observability by default.
+| Folder | Purpose |
+|---|---|
+| `00_Product` | What we are building, for whom, and why |
+| `01_Architecture` | System architecture, patterns, deployment strategy |
+| `02_Domain` | Domain model, bounded contexts, entities, events |
+| `03_API` | REST API design, endpoints, authentication, webhooks |
+| `04_Data` | Database design, persistence strategy, caching |
+| `05_Security` | How SentinelAI itself is secured (not client findings) |
+| `06_Development` | Coding standards, Git workflow, testing strategy |
+| `07_Operations` | CI/CD, logging, monitoring, deployment |
+| `08_Engineering_Research` | Technology investigations and evaluations |
+| `09_Decisions` | Architecture Decision Records (ADRs) |
+| `10_Future` | Ideas beyond the current scope |
+| `11_Engineering` | Development process, patterns, checklists |
+| `12_Quality` | Quality gates, acceptance criteria, technical debt |
+| `99_Meetings` | Session logs and progress tracking |
 
-## Project Status
+## Philosophy
 
-Current Phase:
-
-**Architecture & Product Design**
-
-At this stage the project is intentionally focused on documentation,
-architecture, domain modeling and engineering decisions before
-implementation begins.
-
-## Repository Structure
-
-The repository will evolve around five major areas:
-
-``` text
-docs/      -> Product, Architecture and Engineering documentation
-src/       -> Application source code
-tests/     -> Automated tests
-tools/     -> Development and automation utilities
-.github/   -> CI/CD workflows
+```
+Documentation First → Architecture Before Code → Security by Design → Research Driven Engineering
 ```
 
-## Documentation Philosophy
-
-Every important engineering decision will be documented before
-implementation.
-
-The documentation is considered part of the product itself, not an
-afterthought.
+Every document exists to explain a decision, guide an implementation, serve as a future reference, justify a technical choice, or prevent repeating a research effort. Nothing exists simply to fill a folder.
 
 ## License
 
-To be defined.
+Apache License 2.0 (tentative — subject to review before formal publication).
+
+## Hardware Constraints
+
+The initial development environment has no dedicated GPU, 16 GB RAM, and a mechanical HDD. The architecture is designed to work within these constraints: no dependency on large local models, API-first AI integration with local model support via lightweight runtimes like Ollama.
