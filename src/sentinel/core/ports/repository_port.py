@@ -3,8 +3,19 @@
 The domain and Orchestrator depend only on this interface; GitHub-specific
 types (webhook payloads, API models) stay inside the concrete adapter's
 layer (P-08). The real adapter is built in Phase 4
-(infrastructure/core/github/); Phase 3 exercises the Orchestrator against
+(infrastructure/core/github/); Phase 3 exercised the Orchestrator against
 a Fake implementation of this same interface.
+
+Design note (fixed going into Phase 4): the only PR fact that genuinely
+requires a GitHub API call is the changed-files list
+(GitHub_Integration.md's "PR Retrieval and Changed Files"). Everything
+else -- pr_number, base/head branch, author, and critically
+head_commit_sha -- is already carried by the webhook payload itself and
+must NEVER be re-derived from a separate API call (a later call could
+observe a newer commit than the one this delivery is about, corrupting
+Mode A's correlationId). So this port's surface is deliberately narrow:
+`fetch_changed_files` is the only read operation, and the Orchestrator
+supplies the webhook-known identity fields directly via AnalysisTrigger.
 """
 
 from __future__ import annotations
@@ -14,7 +25,7 @@ from typing import Protocol
 
 
 class RepositoryPortError(Exception):
-    """Raised when PR context cannot be retrieved after retries are exhausted.
+    """Raised when changed files cannot be retrieved after retries are exhausted.
 
     Caught by the Orchestrator to trigger the T1-Failed path
     (Persistence_Strategy.md) -- never allowed to propagate as an
@@ -29,18 +40,6 @@ class ChangedFileRef:
 
 
 @dataclass(frozen=True)
-class PullRequestContext:
-    """The read-only PR snapshot fetched for a Mode A trigger."""
-
-    pr_number: int
-    base_branch: str
-    head_branch: str
-    author: str
-    head_commit_sha: str
-    changed_files: tuple[ChangedFileRef, ...]
-
-
-@dataclass(frozen=True)
 class AnalysisResultSummary:
     """The minimal, mandatory content posted back to GitHub -- never waits
     on AI Enrichment or Agent Execution (AI_Agent_Architecture.md §8).
@@ -51,8 +50,8 @@ class AnalysisResultSummary:
 
 
 class RepositoryPort(Protocol):
-    def fetch_pr_context(self, repository_external_id: str, pr_number: int) -> PullRequestContext:
-        """Raises RepositoryPortError if context cannot be retrieved after
+    def fetch_changed_files(self, repository_external_id: str, pr_number: int) -> tuple[ChangedFileRef, ...]:
+        """Raises RepositoryPortError if the list cannot be retrieved after
         the adapter's own retry policy is exhausted (GitHub_Integration.md).
         """
         ...

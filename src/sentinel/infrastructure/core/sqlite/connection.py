@@ -12,6 +12,17 @@ pragma has no effect on them one way or the other.
 store issues its own explicit `BEGIN IMMEDIATE ... COMMIT` block, matching
 Persistence_Strategy.md's transaction pseudocode exactly -- sqlite3's
 implicit transaction management is not used here.
+
+`check_same_thread=False`: SentinelAI is a single process sharing one
+connection across requests (Deployment_Strategy.md), but the ASGI server
+(uvicorn/Starlette) dispatches request handling -- and FastAPI's
+BackgroundTasks specifically -- onto worker threads via AnyIO, not
+necessarily the thread that opened the connection. Python's sqlite3
+module refuses cross-thread use by default as a safety guard; here, that
+safety is provided instead by the per-analysis_id serialization queue
+(serialization.py) plus each *Store's own explicit BEGIN IMMEDIATE
+transaction boundary, so disabling the guard is deliberate, not a
+workaround for a bug.
 """
 
 from __future__ import annotations
@@ -20,7 +31,7 @@ import sqlite3
 
 
 def connect(database_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(database_path, isolation_level=None)
+    conn = sqlite3.connect(database_path, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.execute("PRAGMA foreign_keys = ON;")

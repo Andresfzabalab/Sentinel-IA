@@ -7,11 +7,10 @@ T1-Failed path -- against Fake RepositoryPort/ScannerPort.
 from __future__ import annotations
 
 import itertools
-import json
 
 from sentinel.core.application.analysis_orchestrator import AnalysisTrigger, ScannerRuntimeConfig
 from sentinel.core.domain.services.artifact_classification import ChangedFile
-from sentinel.core.ports.repository_port import ChangedFileRef, PullRequestContext
+from sentinel.core.ports.repository_port import ChangedFileRef
 from sentinel.core.ports.scanner_port import NormalizedFindingData, ScannerRunResult
 from tests.core.application.conftest import seed_policy_and_repository
 
@@ -31,6 +30,9 @@ def _mode_a_trigger(correlation_id: str = "corr-1", pr_number: int = 42, head_co
         repository_id="repo-1",
         trigger_mode="mode_a",
         pr_number=pr_number,
+        base_branch="main",
+        head_branch="feature",
+        author="dana",
         head_commit_sha=head_commit_sha,
     )
 
@@ -39,12 +41,8 @@ def test_full_pipeline_produces_a_persisted_pass_verdict(
     build_orchestrator, fake_repository_port, fake_scanner_port, policy_store, repository_config_store, analysis_store,
 ):
     seed_policy_and_repository(policy_store, repository_config_store, policy_rules={"blockOnSeverity": "critical"})
-    fake_repository_port.script_context(
-        "acme/widgets", 42,
-        PullRequestContext(
-            pr_number=42, base_branch="main", head_branch="feature", author="dana", head_commit_sha="sha-1",
-            changed_files=(ChangedFileRef(path="app.py", change_kind="modified"),),
-        ),
+    fake_repository_port.script_changed_files(
+        "acme/widgets", 42, (ChangedFileRef(path="app.py", change_kind="modified"),)
     )
     fake_scanner_port.script_result(
         "semgrep",
@@ -78,12 +76,8 @@ def test_full_pipeline_blocks_on_a_critical_finding(
     build_orchestrator, fake_repository_port, fake_scanner_port, policy_store, repository_config_store, analysis_store,
 ):
     seed_policy_and_repository(policy_store, repository_config_store, policy_rules={"blockOnSeverity": "critical"})
-    fake_repository_port.script_context(
-        "acme/widgets", 42,
-        PullRequestContext(
-            pr_number=42, base_branch="main", head_branch="feature", author="dana", head_commit_sha="sha-1",
-            changed_files=(ChangedFileRef(path="app.py", change_kind="modified"),),
-        ),
+    fake_repository_port.script_changed_files(
+        "acme/widgets", 42, (ChangedFileRef(path="app.py", change_kind="modified"),)
     )
     fake_scanner_port.script_result(
         "semgrep",
@@ -113,12 +107,8 @@ def test_repeated_correlation_id_returns_the_same_analysis_id_without_rescanning
 ):
     """The direct proof of Domain_Events.md's Mode A idempotency rule."""
     seed_policy_and_repository(policy_store, repository_config_store, enabled_scanners=("semgrep",))
-    fake_repository_port.script_context(
-        "acme/widgets", 42,
-        PullRequestContext(
-            pr_number=42, base_branch="main", head_branch="feature", author="dana", head_commit_sha="sha-1",
-            changed_files=(ChangedFileRef(path="app.py", change_kind="modified"),),
-        ),
+    fake_repository_port.script_changed_files(
+        "acme/widgets", 42, (ChangedFileRef(path="app.py", change_kind="modified"),)
     )
 
     orchestrator = build_orchestrator(id_factory=_sequential_id_factory(), clock=_fixed_clock())
@@ -139,20 +129,7 @@ def test_a_different_correlation_id_produces_a_genuinely_new_analysis(
     build_orchestrator, fake_repository_port, policy_store, repository_config_store,
 ):
     seed_policy_and_repository(policy_store, repository_config_store)
-    fake_repository_port.script_context(
-        "acme/widgets", 42,
-        PullRequestContext(
-            pr_number=42, base_branch="main", head_branch="feature", author="dana", head_commit_sha="sha-1",
-            changed_files=(),
-        ),
-    )
-    fake_repository_port.script_context(
-        "acme/widgets", 42,
-        PullRequestContext(
-            pr_number=42, base_branch="main", head_branch="feature", author="dana", head_commit_sha="sha-2",
-            changed_files=(),
-        ),
-    )
+    fake_repository_port.script_changed_files("acme/widgets", 42, ())
 
     orchestrator = build_orchestrator(id_factory=_sequential_id_factory(), clock=_fixed_clock())
 
@@ -222,7 +199,7 @@ def test_mode_b_never_calls_repository_port_and_never_posts_a_github_status(
 
     row = analysis_store.get_analysis(analysis_id)
     assert row["status"] == "completed"
-    assert row["trigger_mode"] == "mode_a" or row["trigger_mode"] == "mode_b"  # sanity: column accepted the value
+    assert row["trigger_mode"] == "mode_b"
     assert row["pr_number"] is None
     assert fake_repository_port.published_results == []  # no PR, no commit -- nothing to post
 
@@ -232,12 +209,8 @@ def test_a_scanner_failure_degrades_but_still_reaches_a_verdict(
 ):
     """P-09 / QA-03, exercised end-to-end through the Orchestrator."""
     seed_policy_and_repository(policy_store, repository_config_store, enabled_scanners=("semgrep", "gitleaks"))
-    fake_repository_port.script_context(
-        "acme/widgets", 42,
-        PullRequestContext(
-            pr_number=42, base_branch="main", head_branch="feature", author="dana", head_commit_sha="sha-1",
-            changed_files=(ChangedFileRef(path="app.py", change_kind="modified"),),
-        ),
+    fake_repository_port.script_changed_files(
+        "acme/widgets", 42, (ChangedFileRef(path="app.py", change_kind="modified"),)
     )
     fake_scanner_port.script_result("semgrep", ScannerRunResult(status="timed_out", failure_note="exceeded timeout"))
 
@@ -258,19 +231,11 @@ def test_verdict_is_identical_regardless_of_which_scanner_port_instance_is_used(
     """A light QA-02-style determinism check at the orchestration level:
     same findings in, same verdict out."""
     seed_policy_and_repository(policy_store, repository_config_store, policy_rules={"blockOnSeverity": "high"})
-    fake_repository_port.script_context(
-        "acme/widgets", 42,
-        PullRequestContext(
-            pr_number=42, base_branch="main", head_branch="feature", author="dana", head_commit_sha="sha-1",
-            changed_files=(ChangedFileRef(path="app.py", change_kind="modified"),),
-        ),
+    fake_repository_port.script_changed_files(
+        "acme/widgets", 42, (ChangedFileRef(path="app.py", change_kind="modified"),)
     )
-    fake_repository_port.script_context(
-        "acme/widgets", 43,
-        PullRequestContext(
-            pr_number=43, base_branch="main", head_branch="feature2", author="dana", head_commit_sha="sha-2",
-            changed_files=(ChangedFileRef(path="app.py", change_kind="modified"),),
-        ),
+    fake_repository_port.script_changed_files(
+        "acme/widgets", 43, (ChangedFileRef(path="app.py", change_kind="modified"),)
     )
     finding = NormalizedFindingData(
         category="sast", artifact_path="app.py", artifact_type="source", rule_or_check_id="r1", severity_level="high"

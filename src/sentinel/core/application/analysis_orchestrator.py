@@ -63,7 +63,10 @@ class AnalysisTrigger:
     repository_id: str
     trigger_mode: str  # 'mode_a' | 'mode_b'
     pr_number: int | None = None
-    head_commit_sha: str | None = None  # known from the webhook payload itself, even before context retrieval
+    base_branch: str | None = None
+    head_branch: str | None = None
+    author: str | None = None
+    head_commit_sha: str | None = None  # known from the webhook payload itself -- never re-derived via API
     manual_trigger_key: str | None = None
     changed_files: tuple[ChangedFile, ...] = ()  # Mode B only -- supplied directly, no RepositoryPort call
 
@@ -120,20 +123,22 @@ class AnalysisOrchestrator:
         pr_snapshot: PullRequestSnapshot | None = None
         if trigger.trigger_mode == "mode_a":
             try:
-                pr_context = self._repository_port.fetch_pr_context(repository.external_identifier, trigger.pr_number)
+                changed_file_refs = self._repository_port.fetch_changed_files(
+                    repository.external_identifier, trigger.pr_number
+                )
             except RepositoryPortError:
                 return self._handle_pr_context_failure(trigger, repository, policy_version, analysis_id, created_at)
 
             pr_snapshot = PullRequestSnapshot(
                 provider="github",
-                pr_number=pr_context.pr_number,
-                base_branch=pr_context.base_branch,
-                head_branch=pr_context.head_branch,
-                author=pr_context.author,
-                head_commit_sha=pr_context.head_commit_sha,
-                changed_file_paths=tuple(f.path for f in pr_context.changed_files),
+                pr_number=trigger.pr_number,
+                base_branch=trigger.base_branch,
+                head_branch=trigger.head_branch,
+                author=trigger.author,
+                head_commit_sha=trigger.head_commit_sha,
+                changed_file_paths=tuple(f.path for f in changed_file_refs),
             )
-            changed_files = tuple(ChangedFile(path=f.path, change_kind=f.change_kind) for f in pr_context.changed_files)
+            changed_files = tuple(ChangedFile(path=f.path, change_kind=f.change_kind) for f in changed_file_refs)
         else:
             changed_files = trigger.changed_files
 
