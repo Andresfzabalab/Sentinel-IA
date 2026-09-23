@@ -212,7 +212,13 @@ class SqliteAnalysisStore:
             conn.execute("COMMIT;")
             return analysis.id
         except Exception:
-            conn.execute("ROLLBACK;")
+            # The inner IntegrityError branch above may already have rolled
+            # back and ended the transaction -- only roll back here if one
+            # is still open, otherwise sqlite3 raises its own
+            # "cannot rollback - no transaction is active" error that would
+            # mask whatever the real failure was.
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
             raise
 
     def create_failed_analysis(self, failed: AnalysisFailed) -> str:
@@ -268,7 +274,8 @@ class SqliteAnalysisStore:
             conn.execute("COMMIT;")
             return failed.id
         except Exception:
-            conn.execute("ROLLBACK;")
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
             raise
 
     def complete_scanner_execution(self, completion: ScannerExecutionCompletion) -> None:

@@ -235,6 +235,52 @@ class Analysis:
     def all_scanner_executions_terminal(self) -> bool:
         return all(execution.is_terminal for execution in self.scanner_executions)
 
+    # -- Correlation (stays inside the Aggregate, not a Domain Service) --
+
+    @staticmethod
+    def _correlation_key(finding: Finding) -> tuple:
+        if finding.location_file is not None and finding.location_line_start is not None:
+            return (finding.artifact_path, finding.location_file, finding.location_line_start)
+        return (finding.artifact_path, finding.category)
+
+    def correlate_findings(self) -> None:
+        """Groups Findings referring to the same underlying issue (e.g. the
+        same secret flagged by two tools, or two scanners reporting the
+        same line) into a shared `correlation_group_id`. This is
+        Analysis-domain logic, entirely within this Aggregate's own
+        boundary -- NOT AI logic (Security_Decision_Flow.md corrects a
+        prior mis-attribution to AI). Deterministic: the same Findings
+        always produce the same grouping (QA-02), and a singleton group
+        (no duplicate) is left with `correlation_group_id = None`.
+        """
+        groups: dict[tuple, list[Finding]] = {}
+        for finding in self.findings:
+            groups.setdefault(self._correlation_key(finding), []).append(finding)
+
+        group_index = 0
+        for key in sorted(groups.keys(), key=str):
+            members = groups[key]
+            if len(members) < 2:
+                continue
+            group_index += 1
+            group_id = f"{self.id}-corr-{group_index}"
+            for finding in members:
+                finding.assign_correlation_group(group_id)
+
+    def correlation_group_sizes(self) -> dict[str, int]:
+        """Finding id -> size of its correlation group (1 if uncorrelated).
+        Feeds Risk Assessment's correlation-density heuristic.
+        """
+        counts: dict[str, int] = {}
+        for finding in self.findings:
+            if finding.correlation_group_id:
+                counts[finding.correlation_group_id] = counts.get(finding.correlation_group_id, 0) + 1
+
+        return {
+            finding.id: counts[finding.correlation_group_id] if finding.correlation_group_id else 1
+            for finding in self.findings
+        }
+
     # -- Finalization (T3) ------------------------------------------------
 
     def record_verdict(

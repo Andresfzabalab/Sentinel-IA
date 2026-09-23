@@ -43,6 +43,12 @@ class PullRequestSnapshot:
     """A read-only, immutable snapshot of a GitHub PR at the moment an
     Analysis started (External Reference, per Domain_Concept_Model.md) --
     never present under a Mode B ad hoc manual trigger.
+
+    `head_commit_sha` is not in Entities_Value_Objects.md's literal field
+    list for this VO, but is included here as a practical necessity: it is
+    the value Mode A's correlationId is deterministically derived from
+    (Domain_Events.md) and is persisted as `analysis.pr_head_commit_sha`
+    (Data_Model.md) -- the snapshot would otherwise have no way to carry it.
     """
 
     provider: str
@@ -50,6 +56,7 @@ class PullRequestSnapshot:
     base_branch: str
     head_branch: str
     author: str
+    head_commit_sha: str
     changed_file_paths: tuple[str, ...]
 
 

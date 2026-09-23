@@ -4,6 +4,8 @@ guards (Persistence_Strategy.md, Testing_Strategy.md's Persistence Tests).
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from sentinel.infrastructure.core.sqlite.analysis_store import (
@@ -78,6 +80,22 @@ def test_t1_is_idempotent_on_correlation_id(sqlite_conn, seeded_repository_id):
     assert first_id == second_id == "an-1"
     count = sqlite_conn.execute("SELECT COUNT(*) AS c FROM analysis WHERE correlation_id = ?", (create.correlation_id,)).fetchone()["c"]
     assert count == 1
+
+
+def test_a_genuine_integrity_error_unrelated_to_correlation_id_propagates_cleanly(sqlite_conn):
+    """Regression test: an IntegrityError caused by something other than a
+    duplicate correlation_id (here, a foreign key violation because no
+    repository/policy_version was ever seeded) must propagate as the real
+    sqlite3.IntegrityError -- not be masked by a second, failing ROLLBACK
+    attempt on an already-closed transaction.
+    """
+    store = SqliteAnalysisStore(sqlite_conn)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.create_analysis(_analysis_create(), artifacts=(), scanner_executions=())
+
+    # The connection must be left usable afterwards (transaction properly closed).
+    assert sqlite_conn.execute("SELECT COUNT(*) AS c FROM analysis").fetchone()["c"] == 0
 
 
 def test_t1_failed_path_never_reaches_running(sqlite_conn, seeded_repository_id):

@@ -112,6 +112,77 @@ class TestAnalysisScanningPhase:
             analysis.complete_scanner_execution("semgrep", "succeeded", completed_at="t3")
 
 
+class TestAnalysisCorrelation:
+    def test_findings_sharing_the_same_location_are_grouped(self) -> None:
+        analysis = _running_analysis()
+        f1 = _finding(id="f-1")
+        f1.location_file = "app.py"
+        f1.location_line_start = 10
+        f2 = Finding(
+            id="f-2", scanner_execution_id="se-1", scanner_id="bandit", category="sast",
+            artifact_path="app.py", artifact_type="source", rule_or_check_id="r2",
+            severity=Severity(level="medium"), location_file="app.py", location_line_start=10,
+        )
+        analysis.complete_scanner_execution("semgrep", "succeeded", completed_at="t1", findings=(f1, f2))
+
+        analysis.correlate_findings()
+
+        assert f1.correlation_group_id is not None
+        assert f1.correlation_group_id == f2.correlation_group_id
+
+    def test_a_singleton_finding_is_left_uncorrelated(self) -> None:
+        analysis = _running_analysis()
+        analysis.complete_scanner_execution("semgrep", "succeeded", completed_at="t1", findings=(_finding(),))
+
+        analysis.correlate_findings()
+
+        assert analysis.findings[0].correlation_group_id is None
+
+    def test_correlation_is_deterministic(self) -> None:
+        analysis = _running_analysis()
+        f1 = Finding(
+            id="f-1", scanner_execution_id="se-1", scanner_id="semgrep", category="sast",
+            artifact_path="app.py", artifact_type="source", rule_or_check_id="r1", severity=Severity(level="high"),
+            location_file="app.py", location_line_start=5,
+        )
+        f2 = Finding(
+            id="f-2", scanner_execution_id="se-1", scanner_id="bandit", category="sast",
+            artifact_path="app.py", artifact_type="source", rule_or_check_id="r2", severity=Severity(level="medium"),
+            location_file="app.py", location_line_start=5,
+        )
+        analysis.complete_scanner_execution("semgrep", "succeeded", completed_at="t1", findings=(f1, f2))
+
+        analysis.correlate_findings()
+        first_group = f1.correlation_group_id
+        f1.assign_correlation_group(None)
+        f2.assign_correlation_group(None)
+        analysis.correlate_findings()
+
+        assert f1.correlation_group_id == first_group
+
+    def test_correlation_group_sizes_reflects_group_membership(self) -> None:
+        analysis = _running_analysis()
+        f1 = Finding(
+            id="f-1", scanner_execution_id="se-1", scanner_id="semgrep", category="sast",
+            artifact_path="app.py", artifact_type="source", rule_or_check_id="r1", severity=Severity(level="high"),
+            location_file="app.py", location_line_start=5,
+        )
+        f2 = Finding(
+            id="f-2", scanner_execution_id="se-1", scanner_id="bandit", category="sast",
+            artifact_path="app.py", artifact_type="source", rule_or_check_id="r2", severity=Severity(level="medium"),
+            location_file="app.py", location_line_start=5,
+        )
+        f3 = _finding(id="f-3")  # unrelated, no location
+        analysis.complete_scanner_execution("semgrep", "succeeded", completed_at="t1", findings=(f1, f2, f3))
+
+        analysis.correlate_findings()
+        sizes = analysis.correlation_group_sizes()
+
+        assert sizes["f-1"] == 2
+        assert sizes["f-2"] == 2
+        assert sizes["f-3"] == 1
+
+
 class TestAnalysisVerdict:
     def test_record_verdict_requires_every_finding_to_have_risk_assigned(self) -> None:
         analysis = _running_analysis()
