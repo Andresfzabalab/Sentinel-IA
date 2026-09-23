@@ -12,6 +12,11 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "pydantic>=2.6",
     "python-dotenv>=1.0",
+    # Alembic manages ONLY schema versioning/migrations (Persistence_Strategy.md).
+    # It pulls in SQLAlchemy Core internally to connect and run migration scripts,
+    # but no ORM is used to encapsulate the T1-T3 transactions themselves -- those
+    # are executed with the stdlib sqlite3 module directly (see infrastructure/*/sqlite/).
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]
