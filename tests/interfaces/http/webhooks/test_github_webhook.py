@@ -1,9 +1,12 @@
 """Proves Phase 4's exit criterion (Implementation_Strategy.md): a webhook
 delivery reaches the endpoint, is signature-verified, and is retrievable
-end-to-end through to a Commit Status post -- with ScannerPort still a
-placeholder, since real scanner adapters are Phase 5. GitHub itself is
-mocked at the HTTP-transport level (Testing_Strategy.md's GitHub
-Integration Tests), never called for real in this automated suite.
+end-to-end through to a Commit Status post. GitHub's REST API is mocked at
+the HTTP-transport level (Testing_Strategy.md's GitHub Integration Tests),
+never called for real in this automated suite; the real `git clone`
+checkout (Phase 6) is stubbed out via NullWorkingDirectoryPort so this
+suite never dials out to github.com or depends on network availability --
+that real-checkout path has its own dedicated, fully offline tests in
+tests/infrastructure/core/scanners/test_git_checkout_provider.py.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from sentinel.infrastructure.schema import create_full_schema
 from sentinel.interfaces.composition import build_dependencies
 from sentinel.interfaces.http.app import create_app
 from sentinel.shared.config import Settings
+from tests.fakes.null_working_directory_port import NullWorkingDirectoryPort
 
 _WEBHOOK_SECRET = "whsec_test"
 
@@ -83,7 +87,9 @@ def mock_github_transport(github_calls):
 def client(tmp_path, mock_github_transport):
     db_path = tmp_path / "webhook_test.sqlite"
     settings = _settings(str(db_path))
-    dependencies = build_dependencies(settings, github_transport=mock_github_transport)
+    dependencies = build_dependencies(
+        settings, github_transport=mock_github_transport, working_directory_port=NullWorkingDirectoryPort()
+    )
     create_full_schema(dependencies.connection)
 
     policy_store = SqlitePolicyStore(dependencies.connection)

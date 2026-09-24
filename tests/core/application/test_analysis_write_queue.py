@@ -1,12 +1,13 @@
-"""Proves the per-analysis_id serialization queue stub (Phase 1; exercised
-for real under concurrency in Phase 6).
+"""Proves the per-analysis_id serialization queue (moved to core/application/
+in Phase 6, since it has no infrastructure dependency and the Orchestrator
+now uses it directly for real concurrent scanner completions).
 """
 
 from __future__ import annotations
 
 import threading
 
-from sentinel.infrastructure.core.sqlite.serialization import AnalysisWriteQueue
+from sentinel.core.application.analysis_write_queue import AnalysisWriteQueue
 
 
 def test_same_analysis_id_returns_the_same_lock_instance():

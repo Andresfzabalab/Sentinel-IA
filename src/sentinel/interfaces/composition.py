@@ -25,6 +25,7 @@ from sentinel.core.ports.risk_port import DomainRiskPort
 from sentinel.infrastructure.core.github.client import GitHubClient
 from sentinel.infrastructure.core.github.repository_port_adapter import GitHubRepositoryPort
 from sentinel.infrastructure.core.scanners.composite_scanner_port import CompositeScannerPort
+from sentinel.infrastructure.core.scanners.git_checkout_provider import GitCheckoutProvider
 from sentinel.infrastructure.core.sqlite.analysis_store import SqliteAnalysisStore
 from sentinel.infrastructure.core.sqlite.analysis_store_adapter import SqliteAnalysisStoreAdapter
 from sentinel.infrastructure.core.sqlite.audit_store import SqliteAuditStore
@@ -59,11 +60,19 @@ class AppDependencies:
     github_client: GitHubClient
 
 
-def build_dependencies(settings: Settings, *, github_transport: object | None = None) -> AppDependencies:
-    """`github_transport` is a narrow, deliberate escape hatch for tests: it
-    lets a test supply an `httpx.MockTransport` so the webhook can be
-    exercised end-to-end without real network calls, while every other
-    line of this function is exactly the real production wiring.
+def build_dependencies(
+    settings: Settings,
+    *,
+    github_transport: object | None = None,
+    working_directory_port: object | None = None,
+) -> AppDependencies:
+    """`github_transport` and `working_directory_port` are narrow, deliberate
+    escape hatches for tests: the former lets a test supply an
+    `httpx.MockTransport` so the webhook can be exercised end-to-end
+    without real network calls; the latter lets a test skip the real `git
+    clone` (which would otherwise dial out to github.com and could hang up
+    to its timeout on a network-isolated CI runner) with a stub. Every
+    other line of this function is exactly the real production wiring.
     """
     connection = connect(settings.database_path)
 
@@ -75,7 +84,8 @@ def build_dependencies(settings: Settings, *, github_transport: object | None = 
 
     github_client = GitHubClient(settings.github_token, transport=github_transport)
     repository_port = GitHubRepositoryPort(github_client)
-    scanner_port = CompositeScannerPort()  # Semgrep/Bandit/Trivy/Gitleaks/Checkov (Phase 5); real checkout arrives Phase 6
+    scanner_port = CompositeScannerPort()  # Semgrep/Bandit/Trivy/Gitleaks/Checkov (Phase 5)
+    working_directory_port = working_directory_port or GitCheckoutProvider(settings.github_token)  # real PR checkout (Phase 6)
 
     orchestrator = AnalysisOrchestrator(
         repository_port=repository_port,
@@ -88,6 +98,7 @@ def build_dependencies(settings: Settings, *, github_transport: object | None = 
         policy_store=SqlitePolicyStoreAdapter(policy_store),
         audit_store=SqliteAuditStoreAdapter(audit_store),
         notification_store=SqliteNotificationStoreAdapter(notification_store),
+        working_directory_port=working_directory_port,
     )
 
     return AppDependencies(
@@ -108,6 +119,12 @@ def main() -> None:
         sys.exit(1)
 
     dependencies = build_dependencies(settings)
+
+    # Crash & Restart Recovery (Persistence_Strategy.md) -- must run once,
+    # before accepting any new webhook, so no row is ever left permanently
+    # 'running' from a prior process's abrupt termination.
+    dependencies.orchestrator.recover_incomplete_analyses()
+
     app = create_app(settings=settings, dependencies=dependencies)
     uvicorn.run(app, host="0.0.0.0", port=8000)
 

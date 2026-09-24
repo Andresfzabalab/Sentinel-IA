@@ -409,3 +409,18 @@ class SqliteAnalysisStore:
 
     def get_artifacts(self, analysis_id: str) -> list[sqlite3.Row]:
         return self._conn.execute("SELECT * FROM artifact WHERE analysis_id = ?", (analysis_id,)).fetchall()
+
+    def find_running_scanner_executions(self) -> list[sqlite3.Row]:
+        """Crash & Restart Recovery, step 1 (Persistence_Strategy.md): every
+        row still 'running' when the process restarts has no in-memory
+        handle left -- the process that held it is the one that just
+        restarted.
+        """
+        return self._conn.execute("SELECT * FROM scanner_execution WHERE status = 'running'").fetchall()
+
+    def find_running_analysis_ids(self) -> list[str]:
+        """Crash & Restart Recovery, step 2: every Analysis still 'running'
+        must be re-evaluated once step 1 has resolved its scanner executions.
+        """
+        rows = self._conn.execute("SELECT id FROM analysis WHERE status = 'running'").fetchall()
+        return [row["id"] for row in rows]

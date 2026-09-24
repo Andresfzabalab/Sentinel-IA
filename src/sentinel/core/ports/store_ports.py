@@ -33,6 +33,16 @@ class AnalysisStore(Protocol):
 
     def finalize(self, analysis: Analysis) -> None: ...
 
+    def load(self, analysis_id: str) -> Analysis:
+        """Reconstructs the full Aggregate from storage -- used by Crash &
+        Restart Recovery (Persistence_Strategy.md) to resume finalization.
+        """
+        ...
+
+    def find_running_analysis_ids(self) -> tuple[str, ...]: ...
+
+    def recover_stale_scanner_executions(self, failure_note: str, completed_at: str) -> tuple[str, ...]: ...
+
 
 class RepositoryConfigStore(Protocol):
     def get_repository(self, repository_id: str) -> Repository: ...
@@ -40,6 +50,13 @@ class RepositoryConfigStore(Protocol):
 
 class PolicyStore(Protocol):
     def get_current_policy_version(self, policy_id: str) -> PolicyVersion: ...
+
+    def get_version(self, policy_version_id: str) -> PolicyVersion:
+        """Resolves a *specific*, possibly no-longer-current version -- an
+        Analysis always references one exact PolicyVersion, never "current"
+        (QA-01).
+        """
+        ...
 
 
 class AuditStore(Protocol):

@@ -21,7 +21,21 @@ class SqlitePolicyStoreAdapter:
         row = self._store.get_current_version(policy_id)
         if row is None:
             raise RepositoryMissingPolicy(f"policy {policy_id!r} has no published version")
+        return self._to_domain(row)
 
+    def get_version(self, policy_version_id: str) -> PolicyVersion:
+        """Resolves a *specific* version by id -- used by Crash & Restart
+        Recovery, which must re-evaluate an Analysis against the exact
+        PolicyVersion it originally referenced, never "whatever is current
+        now" (QA-01, QA-02).
+        """
+        row = self._store.get_policy_version(policy_version_id)
+        if row is None:
+            raise RepositoryMissingPolicy(f"policy_version {policy_version_id!r} not found")
+        return self._to_domain(row)
+
+    @staticmethod
+    def _to_domain(row) -> PolicyVersion:
         return PolicyVersion(
             id=row["id"],
             policy_id=row["policy_id"],

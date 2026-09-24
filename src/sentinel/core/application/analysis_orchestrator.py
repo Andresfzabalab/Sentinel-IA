@@ -21,9 +21,11 @@ this class -- that is the entire point of the port/adapter boundary
 from __future__ import annotations
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from sentinel.core.application.analysis_write_queue import AnalysisWriteQueue
 from sentinel.core.domain.analysis.entities import Analysis, Finding, ScannerExecution
 from sentinel.core.domain.analysis.value_objects import Artifact, PullRequestSnapshot, Severity
 from sentinel.core.domain.audit.entities import AuditRecord
@@ -37,8 +39,9 @@ from sentinel.core.ports.event_bus_port import EventBusPort
 from sentinel.core.ports.policy_port import PolicyPort
 from sentinel.core.ports.repository_port import AnalysisResultSummary, RepositoryPort, RepositoryPortError
 from sentinel.core.ports.risk_port import RiskPort
-from sentinel.core.ports.scanner_port import ScannerPort
+from sentinel.core.ports.scanner_port import ScannerPort, ScannerRunResult
 from sentinel.core.ports.store_ports import AnalysisStore, AuditStore, NotificationStore, PolicyStore, RepositoryConfigStore
+from sentinel.core.ports.working_directory_port import WorkingDirectoryError, WorkingDirectoryPort
 
 
 def _utc_now_iso() -> str:
@@ -86,6 +89,8 @@ class AnalysisOrchestrator:
         audit_store: AuditStore,
         notification_store: NotificationStore,
         scanner_runtime_config: dict[str, ScannerRuntimeConfig] | None = None,
+        working_directory_port: WorkingDirectoryPort | None = None,
+        analysis_write_queue: AnalysisWriteQueue | None = None,
         id_factory: "callable[[], str]" = lambda: str(uuid.uuid4()),
         clock: "callable[[], str]" = _utc_now_iso,
     ) -> None:
@@ -100,6 +105,10 @@ class AnalysisOrchestrator:
         self._audit_store = audit_store
         self._notification_store = notification_store
         self._scanner_runtime_config = scanner_runtime_config or {}
+        # None until Phase 6 wires a real checkout provider in composition.py;
+        # scanners then simply degrade honestly against no real files (P-09).
+        self._working_directory_port = working_directory_port
+        self._analysis_write_queue = analysis_write_queue or AnalysisWriteQueue()
         self._id_factory = id_factory
         self._clock = clock
 
@@ -177,7 +186,7 @@ class AnalysisOrchestrator:
             # A concurrent identical trigger won the race -- duplicate, stop here.
             return persisted_id
 
-        self._run_scanners(analysis)
+        self._run_scanners(analysis, repository)
         self._finalize(analysis, policy_version)
         self._publish_result(repository, analysis)
 
@@ -219,35 +228,71 @@ class AnalysisOrchestrator:
 
         return persisted_id
 
-    def _run_scanners(self, analysis: Analysis) -> None:
-        for execution in list(analysis.scanner_executions):
-            # working_directory is "" until Phase 6 wires a real PR checkout
-            # (Implementation_Strategy.md) -- every adapter must degrade
-            # honestly (a 'failed' ScannerRunResult) rather than hang or
-            # fabricate findings when it has no real files to read (P-09).
-            result = self._scanner_port.run(
-                execution.scanner_id, execution.scanner_version, execution.timeout_seconds,
-                analysis.artifacts, working_directory="",
-            )
-            completed_at = self._clock()
-            findings = tuple(
-                Finding(
-                    id=f"{analysis.id}-f-{execution.scanner_id}-{i}",
-                    scanner_execution_id=execution.id,
-                    scanner_id=execution.scanner_id,
-                    category=nf.category,
-                    artifact_path=nf.artifact_path,
-                    artifact_type=nf.artifact_type,
-                    rule_or_check_id=nf.rule_or_check_id,
-                    severity=Severity(level=nf.severity_level, raw_value=nf.severity_raw_value),
-                    location_file=nf.location_file,
-                    location_line_start=nf.location_line_start,
-                    location_line_end=nf.location_line_end,
-                    secret_value_redaction_flag=nf.secret_value_redaction_flag,
-                )
-                for i, nf in enumerate(result.findings)
-            )
+    def _run_scanners(self, analysis: Analysis, repository) -> None:
+        """Runs every selected scanner concurrently (Phase 6) against a real
+        working directory when one can be prepared. Completions are applied
+        under the per-analysis_id lock (AnalysisWriteQueue), so the
+        in-memory Aggregate mutation and its persistence happen as one
+        uninterrupted step per scanner, even though multiple scanners
+        finish at unpredictable, overlapping times.
+        """
+        executions = list(analysis.scanner_executions)
+        if not executions:
+            return
 
+        working_directory = self._prepare_working_directory(analysis, repository)
+        try:
+            with ThreadPoolExecutor(max_workers=len(executions)) as pool:
+                future_to_execution = {
+                    pool.submit(
+                        self._scanner_port.run,
+                        execution.scanner_id, execution.scanner_version, execution.timeout_seconds,
+                        analysis.artifacts, working_directory,
+                    ): execution
+                    for execution in executions
+                }
+                for future in as_completed(future_to_execution):
+                    execution = future_to_execution[future]
+                    result = future.result()
+                    self._apply_scanner_result(analysis, execution, result)
+        finally:
+            if working_directory and self._working_directory_port is not None:
+                self._working_directory_port.cleanup(working_directory)
+
+    def _prepare_working_directory(self, analysis: Analysis, repository) -> str:
+        if self._working_directory_port is None or analysis.pr_snapshot is None:
+            return ""
+        try:
+            return self._working_directory_port.prepare(
+                repository.external_identifier, analysis.pr_snapshot.head_commit_sha
+            )
+        except WorkingDirectoryError:
+            # A checkout failure degrades to scanners running with no real
+            # files -- each adapter already reports 'failed' honestly for
+            # that (P-09); it must never block or fail the whole Analysis.
+            return ""
+
+    def _apply_scanner_result(self, analysis: Analysis, execution: ScannerExecution, result: ScannerRunResult) -> None:
+        completed_at = self._clock()
+        findings = tuple(
+            Finding(
+                id=f"{analysis.id}-f-{execution.scanner_id}-{i}",
+                scanner_execution_id=execution.id,
+                scanner_id=execution.scanner_id,
+                category=nf.category,
+                artifact_path=nf.artifact_path,
+                artifact_type=nf.artifact_type,
+                rule_or_check_id=nf.rule_or_check_id,
+                severity=Severity(level=nf.severity_level, raw_value=nf.severity_raw_value),
+                location_file=nf.location_file,
+                location_line_start=nf.location_line_start,
+                location_line_end=nf.location_line_end,
+                secret_value_redaction_flag=nf.secret_value_redaction_flag,
+            )
+            for i, nf in enumerate(result.findings)
+        )
+
+        with self._analysis_write_queue.lock_for(analysis.id):
             analysis.complete_scanner_execution(
                 execution.scanner_id, result.status, completed_at,
                 exit_code=result.exit_code, failure_note=result.failure_note, findings=findings,
@@ -256,11 +301,11 @@ class AnalysisOrchestrator:
                 analysis.id, analysis.find_scanner_execution(execution.scanner_id), findings
             )
 
-            self._event_bus.publish(
-                "ScannerExecutionCompleted",
-                {"correlationId": analysis.correlation_id, "analysisId": analysis.id,
-                 "scannerId": execution.scanner_id, "status": result.status},
-            )
+        self._event_bus.publish(
+            "ScannerExecutionCompleted",
+            {"correlationId": analysis.correlation_id, "analysisId": analysis.id,
+             "scannerId": execution.scanner_id, "status": result.status},
+        )
 
     def _finalize(self, analysis: Analysis, policy_version) -> None:
         analysis.correlate_findings()
@@ -361,3 +406,38 @@ class AnalysisOrchestrator:
                 content_snapshot=f'{{"verdict": "{result.verdict}", "description": "{result.description}"}}',
             )
         )
+
+    # -- Crash & Restart Recovery (Persistence_Strategy.md) ----------------
+
+    def recover_incomplete_analyses(self) -> None:
+        """Must run once, before accepting new triggers, after a process
+        restart. Two steps, exactly as documented:
+
+        1. Every scanner_execution still 'running' has no in-memory handle
+           left -- the process that held it is the one that just restarted
+           -- so each becomes 'failed' with a distinguishing note.
+        2. Every Analysis still 'running' is re-evaluated against that
+           now-resolved scanner set and, if all its executions have reached
+           a terminal state, proceeds through the same finalization
+           (`_finalize`) and result publication (`_publish_result`) as the
+           normal flow -- producing a verdict from whatever scanners had
+           genuinely completed before the crash (P-09/QA-03), never a
+           second hang.
+        """
+        self._analysis_store.recover_stale_scanner_executions(
+            "process restarted mid-execution", self._clock()
+        )
+
+        for analysis_id in self._analysis_store.find_running_analysis_ids():
+            analysis = self._analysis_store.load(analysis_id)
+            if not analysis.all_scanner_executions_terminal:
+                continue  # cannot happen after the sweep above, guarded for clarity/safety
+
+            policy_version = self._policy_store.get_version(analysis.policy_version_id)
+            self._finalize(analysis, policy_version)
+
+            try:
+                repository = self._repository_config_store.get_repository(analysis.repository_id)
+                self._publish_result(repository, analysis)
+            except Exception:  # noqa: BLE001 -- notification is best-effort; the verdict is already recorded
+                pass
