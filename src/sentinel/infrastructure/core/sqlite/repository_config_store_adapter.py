@@ -9,7 +9,11 @@ from __future__ import annotations
 import json
 
 from sentinel.core.domain.repository.entities import Repository
-from sentinel.infrastructure.core.sqlite.repository_config_store import SqliteRepositoryConfigStore
+from sentinel.infrastructure.core.sqlite.repository_config_store import (
+    RepositoryConfigUpdate,
+    RepositoryCreate,
+    SqliteRepositoryConfigStore,
+)
 
 
 class SqliteRepositoryConfigStoreAdapter:
@@ -20,7 +24,37 @@ class SqliteRepositoryConfigStoreAdapter:
         row = self._store.get_repository(repository_id)
         if row is None:
             raise KeyError(f"repository {repository_id!r} not found")
+        return self._to_domain(row)
 
+    def create(self, repository: Repository) -> None:
+        self._store.create_repository(
+            RepositoryCreate(
+                id=repository.id,
+                external_identifier=repository.external_identifier,
+                enabled_scanners=json.dumps(list(repository.enabled_scanners)),
+                assigned_policy_id=repository.assigned_policy_id,
+                created_at=repository.created_at,
+                updated_at=repository.updated_at,
+                provider=repository.provider,
+                ai_provider_config=json.dumps(repository.ai_provider_config) if repository.ai_provider_config else None,
+                active=repository.active,
+            )
+        )
+
+    def update(self, repository: Repository) -> None:
+        self._store.update_configuration(
+            RepositoryConfigUpdate(
+                id=repository.id,
+                enabled_scanners=json.dumps(list(repository.enabled_scanners)),
+                assigned_policy_id=repository.assigned_policy_id,
+                active=repository.active,
+                updated_at=repository.updated_at,
+                ai_provider_config=json.dumps(repository.ai_provider_config) if repository.ai_provider_config else None,
+            )
+        )
+
+    @staticmethod
+    def _to_domain(row) -> Repository:
         return Repository(
             id=row["id"],
             external_identifier=row["external_identifier"],

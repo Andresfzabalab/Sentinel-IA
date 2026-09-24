@@ -105,3 +105,9 @@ class SqlitePolicyStore:
         if policy is None or policy["current_version_id"] is None:
             return None
         return self.get_policy_version(policy["current_version_id"])
+
+    def get_max_version_number(self, policy_id: str) -> int | None:
+        row = self._conn.execute(
+            "SELECT MAX(version_number) AS max_version FROM policy_version WHERE policy_id = ?", (policy_id,)
+        ).fetchone()
+        return row["max_version"] if row and row["max_version"] is not None else None

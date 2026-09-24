@@ -47,6 +47,17 @@ class AnalysisStore(Protocol):
 class RepositoryConfigStore(Protocol):
     def get_repository(self, repository_id: str) -> Repository: ...
 
+    def create(self, repository: Repository) -> None:
+        """T-Repo -- initial registration."""
+        ...
+
+    def update(self, repository: Repository) -> None:
+        """T-Repo -- Configuration Changed (UC-3). Persists the Repository's
+        *current* full state -- the caller must have already applied
+        `Repository.update_configuration(...)` to it.
+        """
+        ...
+
 
 class PolicyStore(Protocol):
     def get_current_policy_version(self, policy_id: str) -> PolicyVersion: ...
@@ -55,6 +66,24 @@ class PolicyStore(Protocol):
         """Resolves a *specific*, possibly no-longer-current version -- an
         Analysis always references one exact PolicyVersion, never "current"
         (QA-01).
+        """
+        ...
+
+    def create_policy(self, policy_id: str, created_at: str) -> None: ...
+
+    def next_version_number(self, policy_id: str) -> int:
+        """Determines the version number a newly published version should
+        use -- DevSecOps submits rules, not a version number (UC-4).
+        """
+        ...
+
+    def publish_version(
+        self, policy_id: str, version_number: int, rules: dict, published_at: str, published_by: str
+    ) -> PolicyVersion:
+        """T-Policy -- Version Published (UC-4/UC-9: suppression is just
+        content within `rules`, never a separate mechanism). Raises
+        DuplicatePolicyVersion (core/domain/exceptions.py) if
+        (policy_id, version_number) was already published.
         """
         ...
 
