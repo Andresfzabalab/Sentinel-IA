@@ -50,6 +50,7 @@ class PolicyPublishingService:
         callers should treat that as "retry with a fresh version number."
         """
         now = self._clock()
+        self._policy_store.ensure_policy_exists(policy_id, now)
         version_number = self._policy_store.next_version_number(policy_id)
 
         version = self._policy_store.publish_version(

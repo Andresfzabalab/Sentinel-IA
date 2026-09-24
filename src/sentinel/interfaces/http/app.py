@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from sentinel.shared.config import Settings, load_settings
@@ -57,13 +57,39 @@ def create_app(settings: Settings | None = None, dependencies: "AppDependencies 
 
     if dependencies is not None:
         app.state.deps = dependencies
+        from sentinel.interfaces.http.api.analyses import router as analyses_router
+        from sentinel.interfaces.http.api.audit import router as audit_router
+        from sentinel.interfaces.http.api.auth import router as auth_router
+        from sentinel.interfaces.http.api.policies import router as policies_router
+        from sentinel.interfaces.http.api.repositories import router as repositories_router
         from sentinel.interfaces.http.webhooks.github_webhook import router as github_webhook_router
 
         app.include_router(github_webhook_router)
+        app.include_router(auth_router)
+        app.include_router(analyses_router)
+        app.include_router(repositories_router)
+        app.include_router(policies_router)
+        app.include_router(audit_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.exception_handler(HTTPException)
+    async def api_error_handler(request: Request, exc: HTTPException) -> JSONResponse:
+        """Handles both ApiError (shared/errors.py, detail already shaped
+        as {code, message, correlationId}) and any plain HTTPException a
+        route might still raise, normalizing both into the one documented
+        envelope (API_Contract.md's Error Model).
+        """
+        detail = exc.detail
+        if isinstance(detail, dict) and "code" in detail and "message" in detail:
+            content = build_error_envelope(
+                code=detail["code"], message=detail["message"], correlation_id=detail.get("correlationId")
+            )
+        else:
+            content = build_error_envelope(code="HTTP_ERROR", message=str(detail))
+        return JSONResponse(status_code=exc.status_code, content=content)
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:

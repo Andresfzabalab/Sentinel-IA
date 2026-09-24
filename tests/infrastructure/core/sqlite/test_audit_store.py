@@ -34,6 +34,7 @@ def test_append_and_query_by_analysis_id(sqlite_conn, seeded_repository_id):
 
 
 def test_append_only_has_no_update_or_delete_method():
-    """The class itself structurally offers no way to mutate a written record."""
+    """The class itself structurally offers no way to mutate a written record --
+    every public method is either the one write (`append`) or a read."""
     public_methods = {name for name in dir(SqliteAuditStore) if not name.startswith("_")}
-    assert public_methods == {"append", "get_by_analysis_id", "get_by_correlation_id"}
+    assert public_methods == {"append", "get_by_analysis_id", "get_by_correlation_id", "find"}

@@ -71,6 +71,14 @@ class PolicyStore(Protocol):
 
     def create_policy(self, policy_id: str, created_at: str) -> None: ...
 
+    def ensure_policy_exists(self, policy_id: str, created_at: str) -> None:
+        """Idempotent: creates the Policy shell only if it doesn't already
+        exist. Lets `publish_version` be self-sufficient for a brand-new
+        policy_id (API_Contract.md's `POST /policies/{policyId}/versions`
+        has no separate "create policy" endpoint).
+        """
+        ...
+
     def next_version_number(self, policy_id: str) -> int:
         """Determines the version number a newly published version should
         use -- DevSecOps submits rules, not a version number (UC-4).

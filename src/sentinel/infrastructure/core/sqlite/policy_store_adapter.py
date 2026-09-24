@@ -45,6 +45,10 @@ class SqlitePolicyStoreAdapter:
     def create_policy(self, policy_id: str, created_at: str) -> None:
         self._store.create_policy(PolicyCreate(id=policy_id, created_at=created_at))
 
+    def ensure_policy_exists(self, policy_id: str, created_at: str) -> None:
+        if self._store.get_policy(policy_id) is None:
+            self._store.create_policy(PolicyCreate(id=policy_id, created_at=created_at))
+
     def next_version_number(self, policy_id: str) -> int:
         current_max = self._store.get_max_version_number(policy_id)
         return 1 if current_max is None else current_max + 1

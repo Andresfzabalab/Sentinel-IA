@@ -167,6 +167,20 @@ CREATE TABLE IF NOT EXISTS notification (
 );
 """
 
+# DevSecOps API session tokens (Phase 8, API_Contract.md's OAuth Boundary
+# Contract). Deliberately not a domain Aggregate -- the MVP's Identity
+# context is intentionally kept minimal (a DevSecOps identity is just their
+# GitHub login), consistent with not building more than UC-1..UC-9 actually
+# require (Architecture_Patterns.md's stance against speculative generality).
+CREATE_SESSION = """
+CREATE TABLE IF NOT EXISTS session (
+    token TEXT PRIMARY KEY,
+    devsecops_login TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+"""
+
 # Order matters: SQLite tolerates forward FK references within one
 # CREATE TABLE, but the referenced table must exist by the time a row is
 # actually inserted -- this order also just reads naturally top-down.
@@ -180,6 +194,7 @@ ALL_TABLES_IN_ORDER: tuple[str, ...] = (
     CREATE_FINDING,
     CREATE_AUDIT_RECORD,
     CREATE_NOTIFICATION,
+    CREATE_SESSION,
 )
 
 ALL_INDEXES_IN_ORDER: tuple[str, ...] = (
@@ -190,6 +205,7 @@ ALL_INDEXES_IN_ORDER: tuple[str, ...] = (
 
 # Reverse of ALL_TABLES_IN_ORDER, respecting FK dependents-before-dependencies.
 DROP_TABLES_IN_ORDER: tuple[str, ...] = (
+    "DROP TABLE IF EXISTS session;",
     "DROP TABLE IF EXISTS notification;",
     "DROP TABLE IF EXISTS audit_record;",
     "DROP TABLE IF EXISTS finding;",

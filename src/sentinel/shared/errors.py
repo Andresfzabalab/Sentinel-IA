@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from fastapi import HTTPException
 from pydantic import BaseModel
 
 
@@ -25,3 +26,13 @@ class ErrorEnvelope(BaseModel):
 def build_error_envelope(code: str, message: str, correlation_id: str | None = None) -> dict[str, Any]:
     """Builds the error envelope dict as specified in API_Contract.md's Error Model."""
     return ErrorEnvelope(error=ErrorDetail(code=code, message=message, correlationId=correlation_id)).model_dump()
+
+
+class ApiError(HTTPException):
+    """Raised by any DevSecOps-facing route/dependency to produce
+    API_Contract.md's exact error envelope shape -- never FastAPI's default
+    `{"detail": ...}` body. Caught by app.py's dedicated exception handler.
+    """
+
+    def __init__(self, status_code: int, code: str, message: str, correlation_id: str | None = None) -> None:
+        super().__init__(status_code=status_code, detail={"code": code, "message": message, "correlationId": correlation_id})

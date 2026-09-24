@@ -142,6 +142,20 @@ class GitHubClient:
 
         return files
 
+    def get_pull_request(self, owner: str, repo: str, pr_number: int) -> dict:
+        """The single-PR fallback endpoint (GitHub_Integration.md: "used
+        only if the webhook payload is missing a field SentinelAI needs").
+        Phase 8 needs this to resolve a DevSecOps-supplied PR number (UC-2,
+        Mode A) into its current head_commit_sha/branches/author -- fields
+        a webhook delivery would otherwise carry for free.
+        """
+        response = self._request_with_retry("GET", f"/repos/{owner}/{repo}/pulls/{pr_number}")
+        if response.status_code >= 400:
+            raise GitHubClientError(
+                f"GET /repos/{owner}/{repo}/pulls/{pr_number} returned {response.status_code}: {response.text[:200]}"
+            )
+        return response.json()
+
     def post_commit_status(
         self, owner: str, repo: str, sha: str, *, state: str, context: str, description: str,
         target_url: str | None = None,

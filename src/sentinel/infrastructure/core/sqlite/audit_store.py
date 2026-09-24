@@ -61,3 +61,38 @@ class SqliteAuditStore:
         return self._conn.execute(
             "SELECT * FROM audit_record WHERE correlation_id = ? ORDER BY created_at", (correlation_id,)
         ).fetchall()
+
+    def find(
+        self,
+        *,
+        analysis_id: str | None = None,
+        correlation_id: str | None = None,
+        from_ts: str | None = None,
+        to_ts: str | None = None,
+    ) -> list[sqlite3.Row]:
+        """GET /audit-records (UC-6): any combination of filters -- this
+        endpoint never returns the entire audit trail unfiltered
+        (API_Contract.md requires at least one filter at the route level;
+        this method itself has no default that would return everything).
+        """
+        clauses: list[str] = []
+        params: list[str] = []
+        if analysis_id is not None:
+            clauses.append("subject_analysis_id = ?")
+            params.append(analysis_id)
+        if correlation_id is not None:
+            clauses.append("correlation_id = ?")
+            params.append(correlation_id)
+        if from_ts is not None:
+            clauses.append("created_at >= ?")
+            params.append(from_ts)
+        if to_ts is not None:
+            clauses.append("created_at <= ?")
+            params.append(to_ts)
+
+        where = " AND ".join(clauses)
+        query = "SELECT * FROM audit_record"
+        if where:
+            query += f" WHERE {where}"
+        query += " ORDER BY created_at"
+        return self._conn.execute(query, params).fetchall()
