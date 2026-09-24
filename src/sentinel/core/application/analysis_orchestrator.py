@@ -221,8 +221,13 @@ class AnalysisOrchestrator:
 
     def _run_scanners(self, analysis: Analysis) -> None:
         for execution in list(analysis.scanner_executions):
+            # working_directory is "" until Phase 6 wires a real PR checkout
+            # (Implementation_Strategy.md) -- every adapter must degrade
+            # honestly (a 'failed' ScannerRunResult) rather than hang or
+            # fabricate findings when it has no real files to read (P-09).
             result = self._scanner_port.run(
-                execution.scanner_id, execution.scanner_version, execution.timeout_seconds, analysis.artifacts
+                execution.scanner_id, execution.scanner_version, execution.timeout_seconds,
+                analysis.artifacts, working_directory="",
             )
             completed_at = self._clock()
             findings = tuple(

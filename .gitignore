@@ -17,6 +17,7 @@ htmlcov/
 .ruff_cache/
 
 .venv/
+.venv*/
 venv/
 
 .vscode/

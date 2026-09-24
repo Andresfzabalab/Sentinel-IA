@@ -49,9 +49,19 @@ class ScannerPort(Protocol):
         scanner_version: str,
         timeout_seconds: int,
         artifacts: tuple[Artifact, ...],
+        working_directory: str = "",
     ) -> ScannerRunResult:
         """Must never raise for an ordinary scanner failure/timeout/crash --
         those are represented as a `ScannerRunResult` with status 'failed'
         or 'timed_out' (P-09). Only a genuine adapter bug should raise.
+
+        `working_directory` points to a local directory containing the
+        actual checked-out files a real scanner binary needs to read --
+        added in Phase 5 since static analysis tools fundamentally require
+        real file content, not just the `Artifact` metadata (path/type).
+        Populating it with a real PR checkout is Phase 6 work
+        (Implementation_Strategy.md); Phase 5 adapters must degrade to a
+        'failed' result honestly when it is empty or missing, never hang
+        or fabricate findings.
         """
         ...

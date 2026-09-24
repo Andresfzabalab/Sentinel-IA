@@ -24,7 +24,7 @@ from sentinel.core.ports.policy_port import DomainPolicyPort
 from sentinel.core.ports.risk_port import DomainRiskPort
 from sentinel.infrastructure.core.github.client import GitHubClient
 from sentinel.infrastructure.core.github.repository_port_adapter import GitHubRepositoryPort
-from sentinel.infrastructure.core.scanners.not_implemented_scanner_port import NotYetImplementedScannerPort
+from sentinel.infrastructure.core.scanners.composite_scanner_port import CompositeScannerPort
 from sentinel.infrastructure.core.sqlite.analysis_store import SqliteAnalysisStore
 from sentinel.infrastructure.core.sqlite.analysis_store_adapter import SqliteAnalysisStoreAdapter
 from sentinel.infrastructure.core.sqlite.audit_store import SqliteAuditStore
@@ -75,7 +75,7 @@ def build_dependencies(settings: Settings, *, github_transport: object | None = 
 
     github_client = GitHubClient(settings.github_token, transport=github_transport)
     repository_port = GitHubRepositoryPort(github_client)
-    scanner_port = NotYetImplementedScannerPort()  # replaced by real adapters in Phase 5
+    scanner_port = CompositeScannerPort()  # Semgrep/Bandit/Trivy/Gitleaks/Checkov (Phase 5); real checkout arrives Phase 6
 
     orchestrator = AnalysisOrchestrator(
         repository_port=repository_port,

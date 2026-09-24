@@ -18,6 +18,7 @@ class RecordedRun:
     scanner_version: str
     timeout_seconds: int
     artifacts: tuple[Artifact, ...]
+    working_directory: str = ""
 
 
 class FakeScannerPort(ScannerPort):
@@ -30,7 +31,12 @@ class FakeScannerPort(ScannerPort):
         self._results[scanner_id] = result
 
     def run(
-        self, scanner_id: str, scanner_version: str, timeout_seconds: int, artifacts: tuple[Artifact, ...]
+        self,
+        scanner_id: str,
+        scanner_version: str,
+        timeout_seconds: int,
+        artifacts: tuple[Artifact, ...],
+        working_directory: str = "",
     ) -> ScannerRunResult:
-        self.calls.append(RecordedRun(scanner_id, scanner_version, timeout_seconds, artifacts))
+        self.calls.append(RecordedRun(scanner_id, scanner_version, timeout_seconds, artifacts, working_directory))
         return self._results.get(scanner_id, self._default_result)
