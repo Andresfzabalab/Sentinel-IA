@@ -24,12 +24,21 @@ class PublishedResult:
     result: AnalysisResultSummary
 
 
+@dataclass
+class PublishedComment:
+    repository_external_id: str
+    pr_number: int
+    body: str
+
+
 class FakeRepositoryPort(RepositoryPort):
     def __init__(self) -> None:
         self._changed_files: dict[tuple[str, int], tuple[ChangedFileRef, ...]] = {}
         self._failures: set[tuple[str, int]] = set()
         self.published_results: list[PublishedResult] = []
+        self.published_comments: list[PublishedComment] = []
         self.publish_should_fail: bool = False
+        self.publish_comment_should_fail: bool = False
 
     def script_changed_files(self, repository_external_id: str, pr_number: int, files: tuple[ChangedFileRef, ...]) -> None:
         self._changed_files[(repository_external_id, pr_number)] = files
@@ -48,3 +57,7 @@ class FakeRepositoryPort(RepositoryPort):
     def publish_result(self, repository_external_id: str, head_commit_sha: str, result: AnalysisResultSummary) -> bool:
         self.published_results.append(PublishedResult(repository_external_id, head_commit_sha, result))
         return not self.publish_should_fail
+
+    def publish_summary_comment(self, repository_external_id: str, pr_number: int, body: str) -> bool:
+        self.published_comments.append(PublishedComment(repository_external_id, pr_number, body))
+        return not self.publish_comment_should_fail

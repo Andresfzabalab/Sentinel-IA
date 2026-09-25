@@ -57,6 +57,13 @@ class GitHubRepositoryPort(RepositoryPort):
         except GitHubClientError:
             return False
 
+    def publish_summary_comment(self, repository_external_id: str, pr_number: int, body: str) -> bool:
+        owner, repo = split_external_identifier(repository_external_id)
+        try:
+            return self._client.post_issue_comment(owner, repo, pr_number, body)
+        except GitHubClientError:
+            return False
+
 
 def _map_github_status(github_status: str) -> str:
     """GitHub's PR-files API uses 'added'/'removed'/'modified'/'renamed' --

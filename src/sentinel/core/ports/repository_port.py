@@ -57,8 +57,19 @@ class RepositoryPort(Protocol):
         ...
 
     def publish_result(self, repository_external_id: str, head_commit_sha: str, result: AnalysisResultSummary) -> bool:
-        """Posts the mandatory status check (+ summary comment, for a real
-        adapter). Returns whether delivery succeeded -- a failure here is a
-        Notification concern, never a verdict concern (Ubiquitous_Language.md).
+        """Posts the mandatory status check. Returns whether delivery
+        succeeded -- a failure here is a Notification concern, never a
+        verdict concern (Ubiquitous_Language.md).
+        """
+        ...
+
+    def publish_summary_comment(self, repository_external_id: str, pr_number: int, body: str) -> bool:
+        """Posts the mandatory, redacted summary PR comment
+        (GitHub_Integration.md's "Comments" section) -- the second half of
+        the mandatory Developer-facing channel alongside the status check.
+        Only ever called for a completed, PR-linked (Mode A) Analysis;
+        never for a `failed` Analysis or a Mode B trigger (no PR to comment
+        on). Returns whether delivery succeeded, same Notification-not-verdict
+        semantics as `publish_result`.
         """
         ...

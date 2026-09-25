@@ -26,10 +26,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sentinel.core.application.analysis_write_queue import AnalysisWriteQueue
+from sentinel.core.application.notification_dispatch_service import NotificationDispatchService
 from sentinel.core.domain.analysis.entities import Analysis, Finding, ScannerExecution
 from sentinel.core.domain.analysis.value_objects import Artifact, PullRequestSnapshot, Severity
 from sentinel.core.domain.audit.entities import AuditRecord
-from sentinel.core.domain.notification.entities import Notification
 from sentinel.core.domain.services.artifact_classification import ChangedFile, classify_artifacts
 from sentinel.core.domain.services.policy_evaluation import PolicyFinding
 from sentinel.core.domain.services.risk_assessment import RiskAssessmentInput
@@ -103,7 +103,6 @@ class AnalysisOrchestrator:
         self._repository_config_store = repository_config_store
         self._policy_store = policy_store
         self._audit_store = audit_store
-        self._notification_store = notification_store
         self._scanner_runtime_config = scanner_runtime_config or {}
         # None until Phase 6 wires a real checkout provider in composition.py;
         # scanners then simply degrade honestly against no real files (P-09).
@@ -111,6 +110,7 @@ class AnalysisOrchestrator:
         self._analysis_write_queue = analysis_write_queue or AnalysisWriteQueue()
         self._id_factory = id_factory
         self._clock = clock
+        self._notification_dispatch_service = NotificationDispatchService(repository_port, notification_store, clock=clock)
 
     def process(self, trigger: AnalysisTrigger) -> str:
         """Returns the analysisId -- either a freshly created one, or a
@@ -219,7 +219,7 @@ class AnalysisOrchestrator:
         )
 
         if trigger.head_commit_sha:
-            self._deliver_status(
+            self._notification_dispatch_service.deliver_status(
                 repository.external_identifier,
                 trigger.head_commit_sha,
                 persisted_id,
@@ -376,36 +376,7 @@ class AnalysisOrchestrator:
         )
 
     def _publish_result(self, repository, analysis: Analysis) -> None:
-        if analysis.pr_snapshot is None:
-            return  # Mode B has no PR / commit to post a status against
-
-        description = (
-            "No blocking findings" if analysis.verdict.value == "PASS"
-            else f"Blocked: {len(analysis.verdict.triggered_rules)} triggered rule(s)"
-        )
-        self._deliver_status(
-            repository.external_identifier,
-            analysis.pr_snapshot.head_commit_sha,
-            analysis.id,
-            AnalysisResultSummary(verdict=analysis.verdict.value, description=description),
-        )
-
-    def _deliver_status(self, external_identifier: str, head_commit_sha: str, analysis_id: str, result: AnalysisResultSummary) -> None:
-        try:
-            delivered = self._repository_port.publish_result(external_identifier, head_commit_sha, result)
-        except Exception:  # noqa: BLE001 -- a Notification failure must never affect the verdict already decided
-            delivered = False
-
-        self._notification_store.record_attempt(
-            Notification(
-                id=f"{analysis_id}-notif-{self._clock()}",
-                analysis_id=analysis_id,
-                channel="github-status",
-                status="delivered" if delivered else "failed",
-                attempted_at=self._clock(),
-                content_snapshot=f'{{"verdict": "{result.verdict}", "description": "{result.description}"}}',
-            )
-        )
+        self._notification_dispatch_service.dispatch_for_completed_analysis(repository, analysis)
 
     # -- Crash & Restart Recovery (Persistence_Strategy.md) ----------------
 

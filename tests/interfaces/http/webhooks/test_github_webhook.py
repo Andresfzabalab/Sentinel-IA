@@ -24,6 +24,7 @@ from sentinel.infrastructure.core.sqlite.policy_store import (
     PolicyVersionPublish,
     SqlitePolicyStore,
 )
+from sentinel.infrastructure.core.sqlite.notification_store import SqliteNotificationStore
 from sentinel.infrastructure.core.sqlite.repository_config_store import (
     RepositoryCreate,
     SqliteRepositoryConfigStore,
@@ -66,7 +67,7 @@ def _pull_request_payload(action: str = "opened", pr_number: int = 42, head_sha:
 
 @pytest.fixture()
 def github_calls():
-    return {"statuses": [], "files_requested": 0}
+    return {"statuses": [], "comments": [], "files_requested": 0}
 
 
 @pytest.fixture()
@@ -77,6 +78,9 @@ def mock_github_transport(github_calls):
             return httpx.Response(200, json=[])
         if request.method == "POST" and "/statuses/" in request.url.path:
             github_calls["statuses"].append(json.loads(request.content))
+            return httpx.Response(201)
+        if request.method == "POST" and request.url.path.endswith("/comments"):
+            github_calls["comments"].append(json.loads(request.content))
             return httpx.Response(201)
         return httpx.Response(404)
 
@@ -192,6 +196,15 @@ def test_opened_pull_request_reaches_a_persisted_verdict_and_a_commit_status_pos
     assert github_calls["files_requested"] == 1
     assert len(github_calls["statuses"]) == 1
     assert github_calls["statuses"][0]["context"] == "sentinelai/security-analysis"
+
+    # Phase 10: the mandatory summary PR comment is posted alongside the
+    # status check, and both delivery attempts are recorded as Notifications.
+    assert len(github_calls["comments"]) == 1
+    assert row["verdict"] in github_calls["comments"][0]["body"]
+
+    notification_rows = SqliteNotificationStore(client.dependencies.connection).get_by_analysis_id(analysis_id)
+    channels = {n["channel"]: n["status"] for n in notification_rows}
+    assert channels == {"github-status": "delivered", "github-comment": "delivered"}
 
 
 def test_redelivered_webhook_is_idempotent_end_to_end(client) -> None:

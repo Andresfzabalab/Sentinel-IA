@@ -101,3 +101,27 @@ def test_publish_result_returns_false_on_failure_never_raises() -> None:
     ok = _adapter(handler).publish_result("acme/widgets", "sha1", AnalysisResultSummary(verdict="PASS", description="ok"))
 
     assert ok is False
+
+
+def test_publish_summary_comment_posts_to_the_issue_comments_endpoint() -> None:
+    posted = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posted["path"] = request.url.path
+        posted["body"] = json.loads(request.content)
+        return httpx.Response(201)
+
+    ok = _adapter(handler).publish_summary_comment("acme/widgets", 42, "## SentinelAI Security Analysis: BLOCK")
+
+    assert ok is True
+    assert posted["path"] == "/repos/acme/widgets/issues/42/comments"
+    assert posted["body"]["body"] == "## SentinelAI Security Analysis: BLOCK"
+
+
+def test_publish_summary_comment_returns_false_on_failure_never_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    ok = _adapter(handler).publish_summary_comment("acme/widgets", 42, "body")
+
+    assert ok is False
