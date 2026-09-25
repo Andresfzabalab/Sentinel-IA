@@ -31,16 +31,29 @@ sentinel-ai/
 ```
 core/
 ├── domain/
-│   ├── analysis/        # Analysis Aggregate Root, Finding, ScannerExecution, Artifact VO, PullRequestSnapshot
+│   ├── analysis/        # Analysis Aggregate Root, Finding, ScannerExecution, Artifact/PullRequestSnapshot/Severity/Risk/
+│   │                     # SecurityScore/Verdict VOs (value_objects.py) + entities.py (also owns Correlation -- Domain_Services.md)
 │   ├── repository/      # Repository Aggregate Root
 │   ├── policy/          # Policy Aggregate Root, PolicyVersion VO
 │   ├── audit/           # AuditRecord Entity
-│   └── notification/    # Notification Entity
-├── application/         # Analysis Orchestrator, Notification Dispatch Service (Domain_Services.md)
-└── ports/               # RepositoryPort, ScannerPort, RiskPort, PolicyPort, EventBusPort,
-                          # AnalysisStore/RepositoryConfigStore/PolicyStore/AuditStore/NotificationStore (interfaces only),
-                          # SecurityResultQueryPort, AuditRecorderPort (interfaces only — implementations live in infrastructure/)
+│   ├── notification/    # Notification Entity
+│   ├── services/        # The 5 pure Domain Services: artifact_classification, scanner_selection,
+│   │                     # risk_assessment, security_score, policy_evaluation
+│   └── exceptions.py    # Domain-level invariant violations (VerdictAlreadySet, DuplicatePolicyVersion, etc.)
+├── application/
+│   ├── analysis_orchestrator.py           # THE thin coordinator (P-01)
+│   ├── analysis_write_queue.py            # Per-analysis_id serialization lock -- lives here, not infrastructure/,
+│   │                                       # because it is pure in-process concurrency control with zero infra
+│   │                                       # dependency; the Orchestrator (P-01/P-06) may depend on it directly
+│   ├── repository_configuration_service.py # UC-3 (T-Repo) as a callable operation
+│   ├── policy_publishing_service.py        # UC-4/UC-9 (T-Policy; suppression is just content in `rules`)
+│   └── report_generation_service.py        # UC-5's Report projection (Security-Result-only until Phase 9/10 add AI Enrichment)
+└── ports/                # repository_port.py, scanner_port.py, working_directory_port.py, risk_port.py,
+                           # policy_port.py, event_bus_port.py, store_ports.py (AnalysisStore/RepositoryConfigStore/
+                           # PolicyStore/AuditStore/NotificationStore -- interfaces only, implementations live in infrastructure/)
 ```
+
+**On `AnalysisWriteQueue`'s location**: an earlier implementation pass placed this under `infrastructure/core/sqlite/` (reasoning: it exists to protect SQLite writes). That turned out to be a boundary violation waiting to happen -- the Orchestrator needs to use this lock directly around each scanner completion (Phase 6), and `core/application/` may never import `infrastructure/` (P-01/P-06's own violation test). Since the class itself only imports `threading` and has no actual SQLite dependency, the fix was to move it, not to add an exception to the rule.
 
 `domain/` contains every Aggregate, Entity, and Value Object from `Entities_Value_Objects.md`, plus the pure Domain Services from `Domain_Services.md` (Artifact Classification, Scanner Selection, Risk Assessment, Security Score Calculation, Policy Evaluation). **Nothing in `domain/` imports anything from `infrastructure/`, `interfaces/`, or another module's `domain/`.** It may only import from its own `ports/` (the interfaces, never a concrete adapter) — this is what P-01 and P-06's violation tests actually check against in code.
 
@@ -71,10 +84,18 @@ ai_agent/
 ```
 infrastructure/
 ├── core/
-│   ├── github/            # RepositoryPort implementation (GitHub_Integration.md)
-│   ├── scanners/          # ScannerPort implementations: semgrep.py, bandit.py, trivy.py, gitleaks.py, checkov.py
-│   └── sqlite/            # SqliteAnalysisStore, SqliteRepositoryConfigStore, SqlitePolicyStore,
-│                          # SqliteAuditStore, SqliteNotificationStore, SqliteAuditRecorderPort
+│   ├── github/            # signature.py (webhook HMAC check), client.py (GitHubClient: PR files/status,
+│   │                       # retry+backoff+rate-limit), oauth_client.py (GitHubOAuthClient -- a separate
+│   │                       # credential/concern from client.py's PAT, per Configuration_and_Secrets.md),
+│   │                       # repository_port_adapter.py (GitHubRepositoryPort)
+│   ├── scanners/           # subprocess_runner.py + json_scanner_adapter.py (shared P-09/P-05 machinery),
+│   │                       # semgrep.py/bandit.py/trivy.py/gitleaks.py/checkov.py (one parse_*_output function
+│   │                       # each -- the P-05 boundary), composite_scanner_port.py (dispatches by scanner_id),
+│   │                       # git_checkout_provider.py (WorkingDirectoryPort's real adapter, Phase 6)
+│   └── sqlite/             # connection.py, schema.py, exceptions.py, plus one *_store.py (row/DTO-level) and
+│                           # one *_store_adapter.py (domain-object-level, implements the core/ports/ Protocol)
+│                           # per Aggregate: analysis, repository_config, policy, audit, notification;
+│                           # session_store.py (Phase 8, no domain-facing adapter -- Session isn't an Aggregate)
 ├── ai_agent/
 │   ├── providers/         # AIProviderPort implementations: ollama.py, openai.py, anthropic.py, gemini.py
 │   └── sqlite/            # SqliteAgentExecutionStore
@@ -90,10 +111,14 @@ This is the **only** place third-party infrastructure libraries are imported (th
 ```
 interfaces/
 ├── http/
-│   ├── webhooks/     # POST /webhooks/github (GitHub_Integration.md)
-│   ├── api/           # DevSecOps REST endpoints (API_Contract.md): analyses, repositories, policies, audit-records, auth
-│   └── middleware/    # OAuth session validation, error envelope formatting, correlationId propagation
-├── cli/               # Manual trigger and admin commands (an alternate path to the same Application layer as the HTTP API)
+│   ├── webhooks/      # github_webhook.py: POST /webhooks/github (GitHub_Integration.md) -- the product's primary entry point
+│   ├── api/            # Implemented Phase 8: auth.py (login/callback/logout), analyses.py (POST/GET /analyses,
+│   │                   # GET /analyses/{id}, GET /analyses/{id}/report), repositories.py, policies.py, audit.py
+│   ├── middleware/     # auth.py: require_devsecops_session, a FastAPI dependency checked against the `session`
+│   │                   # table (Identity's actual, simplified shape -- see Bounded_Contexts.md)
+│   └── app.py          # create_app(): the FastAPI factory, registers every router above + the ApiError/HTTPException handler
+├── cli/               # Not yet built. Still intended as a thin wrapper over the same api/ handlers, per the
+│                       # confirmed decision that it must never precede or replace the webhook (C4_Container.md §10)
 └── composition.py     # The composition root: wires every port to its concrete adapter at startup, per Configuration_and_Secrets.md's local execution gate
 ```
 

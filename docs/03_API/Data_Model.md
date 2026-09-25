@@ -28,6 +28,9 @@ This document translates the Aggregates, Entities, and Value Objects already fix
 | `agent_execution` | AI & Agent Module | `AgentExecution` Entity |
 | `ai_enrichment` | AI & Agent Module | `AI Enrichment` Value Object |
 | `security_knowledge_base_entry` | Security Intelligence & Data Module | `SecurityKnowledgeBaseEntry` (data-management boundary, not an Aggregate) |
+| `session` | Sentinel Core | DevSecOps API session tokens (Phase 8) -- not a domain Aggregate; see note below |
+
+**On `session`**: added in Phase 8 (`Implementation_Strategy.md`) to back `API_Contract.md`'s OAuth Boundary Contract. It is deliberately not modeled as a domain Entity or Aggregate -- the MVP's Identity context stays intentionally minimal (a DevSecOps identity is just their GitHub login, per `Bounded_Contexts.md`'s Identity section), so this is plain infrastructure supporting the session-cookie flow, not a citizen of the domain model. Columns: `token` (TEXT PRIMARY KEY, the opaque session token), `devsecops_login` (TEXT NOT NULL), `created_at` (TEXT NOT NULL), `expires_at` (TEXT NOT NULL, checked against the current time on every request). No foreign key to any other table. Added via migration `0002` (additive-first, per `Persistence_Strategy.md`'s Migrations principles).
 
 **Not a table**: `Security Result` (it *is* the `analysis` row once `status = 'completed'` — no separate storage), `Report` (a disposable projection, computed on read from `analysis` + `agent_execution` + `ai_enrichment` — persisting it would violate `Data_Contracts.md`'s "never itself a source of truth" rule), raw scanner native output (never stored at all, per P-05 — only `NormalizedFinding` content, already reflected in `finding`).
 
@@ -247,6 +250,17 @@ Indexes: `INDEX(subject_analysis_id)`, `INDEX(correlation_id)`.
 | `published_at` | TEXT | NOT NULL | — |
 
 Indexes: `UNIQUE(topic, version)`. **No relationship to any Analysis, Repository, or Policy** — no FK, no `analysis_id` column, no `correlation_id` column, consistent with `Aggregates_and_Boundaries.md`'s "Data Management Boundary."
+
+### `session` *(Phase 8 addition — DevSecOps API session tokens)*
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `token` | TEXT | PRIMARY KEY | The opaque session token issued at `GET /auth/callback`; never the raw GitHub OAuth token |
+| `devsecops_login` | TEXT | NOT NULL | The authenticated DevSecOps' GitHub login — this is the entirety of the MVP's "DevSecOps identity" |
+| `created_at` | TEXT | NOT NULL | — |
+| `expires_at` | TEXT | NOT NULL | Checked against the current time on every request (`interfaces/http/middleware/auth.py`); an expired session is `401`, same as a missing one |
+
+No foreign key to any other table — not a domain Aggregate, per the note above the Table Catalog.
 
 ## SQLite → PostgreSQL Type Mapping (future reference only)
 

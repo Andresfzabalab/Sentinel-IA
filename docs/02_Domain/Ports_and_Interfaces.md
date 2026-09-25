@@ -26,18 +26,21 @@ This document catalogs every port in SentinelAI: its type, direction, contract, 
 
 | Port | Type | Adapter(s) | Input | Output |
 |---|---|---|---|---|
-| `RepositoryPort` | Infrastructure | GitHub Adapter | PR reference / status+comment content | PR context (snapshot) / delivery confirmation |
-| `ScannerPort` | Infrastructure | Semgrep, Bandit, Trivy, Gitleaks, Checkov adapters | Artifact paths | Invokes the scanner subprocess and receives its outcome: `NormalizedFinding[]` on success, or a failure/timeout signal (P-05, P-09) |
+| `RepositoryPort` | Infrastructure | GitHub Adapter (`GitHubRepositoryPort`) | Repository external id + PR number (`fetch_changed_files`); a verdict summary + commit sha (`publish_result`) | Changed-files list / delivery confirmation |
+| `ScannerPort` | Infrastructure | Semgrep, Bandit, Trivy, Gitleaks, Checkov adapters | Artifact paths + a `working_directory` (the local checkout a real scanner binary reads from — see `WorkingDirectoryPort` below) | Invokes the scanner subprocess and receives its outcome: `NormalizedFinding[]` on success, or a failure/timeout signal (P-05, P-09) |
+| `WorkingDirectoryPort` | Infrastructure | `GitCheckoutProvider` (a real `git clone`/`checkout`, implemented Phase 6) | Repository external id + `head_commit_sha` | A local directory path containing the checked-out commit, for `ScannerPort` to read; `cleanup()` removes it afterward. Not part of the original port catalog -- added because no adapter could otherwise honestly give a scanner real file content to read; a checkout failure degrades to an empty working directory (each scanner then reports `failed`, per P-09) rather than blocking the Analysis |
 | `RiskPort` | Internal Domain | Risk Engine | Findings + heuristic config | Risk values (P-03) |
 | `PolicyPort` | Internal Domain | Policy Engine | Findings, Risk, Security Score, `PolicyVersionId` | A **computed** PASS/BLOCK value only — this port has no write capability. Applying that value to the Analysis Aggregate (enforcing the write-once invariant) is done by `Analysis.recordVerdict(verdict)`, an Aggregate method invoked by the Analysis Orchestrator, not by this port (P-04; see `Domain_Services.md`'s "What Stays Inside an Aggregate") |
 | `EventBusPort` | Internal Domain — **scoped to Sentinel Core only** | In-process pub/sub | Domain event | Delivery to subscribed handlers *within Sentinel Core* |
-| `AnalysisStore` | Infrastructure (persistence) | SQLite adapter | Analysis Aggregate state | Persisted/retrieved Analysis rows (T1–T3) |
+| `AnalysisStore` | Infrastructure (persistence) | SQLite adapter | Analysis Aggregate state | Persisted/retrieved Analysis rows (T1–T3); also the read-side (`load()`) Crash & Restart Recovery uses to reconstruct the Aggregate |
 | `RepositoryConfigStore` | Infrastructure (persistence) | SQLite adapter | Repository Aggregate state | Persisted/retrieved Repository config (T-Repo) |
 | `PolicyStore` | Infrastructure (persistence) | SQLite adapter | Policy Aggregate state | Persisted/retrieved Policy versions (T-Policy) |
-| `AuditStore` | Infrastructure (persistence) | SQLite adapter | Audit Record | Persisted/retrieved Audit entries (T-Audit) |
+| `AuditStore` | Infrastructure (persistence) | SQLite adapter | Audit Record | Persisted/retrieved Audit entries (T-Audit); also a filtered `find()` query behind `GET /audit-records` (UC-6) |
 | `NotificationStore` | Infrastructure (persistence) | SQLite adapter | Notification delivery attempt | Persisted/retrieved Notification records (T-Notify) |
 
 **Compute vs. apply, for `PolicyPort` specifically**: `PolicyPort` (via the Policy Evaluation Service) *computes* what the verdict should be — a pure function over Findings, Risk, Security Score, and a Policy Version. It has no method to persist that value. Writing the verdict onto the Analysis Aggregate — and enforcing that this can only happen once — is `Analysis.recordVerdict(verdict)`, a method on the Aggregate itself, called by the Analysis Orchestrator as part of T3. This mirrors the general rule in `Domain_Services.md`: a Domain Service decides, an Aggregate method enforces how that decision is recorded.
+
+**On `RepositoryPort`'s narrower-than-originally-described shape**: an earlier draft of this document implied `RepositoryPort` returns a general "PR context" snapshot. Implementation surfaced that PR identity fields (`prNumber`, base/head branch, author, and critically `head_commit_sha`) must come from the triggering webhook payload (or, for a DevSecOps manual trigger, from a resolved-once-per-request lookup) and must never be re-derived from a second API call after the fact -- doing so risks observing a newer commit than the one the trigger is actually about, which would corrupt Mode A's `correlationId`. The port's real surface is therefore exactly two operations: `fetch_changed_files` (the one PR fact that genuinely requires an API call) and `publish_result`. See `GitHub_Integration.md`.
 
 ## AI & Agent Module Ports
 
@@ -67,6 +70,7 @@ graph LR
     subgraph Core["Sentinel Core"]
         RP[RepositoryPort]
         SP[ScannerPort]
+        WDP[WorkingDirectoryPort]
         RiP[RiskPort]
         PP[PolicyPort]
         AS[(AnalysisStore)]
@@ -88,7 +92,9 @@ graph LR
     end
 
     GH[GitHub] <--> RP
+    GH <-->|git clone/checkout| WDP
     SC[Security Scanner Execution] <--> SP
+    WDP -->|local checkout path| SP
     Provider[AI Provider] <--> AIP
     Feeds[Security Intelligence Sources] --> SISP
 
@@ -108,8 +114,9 @@ No arrow in this diagram points from the AI & Agent Module or the Security Intel
 
 | Port | Direction | Read/Write | Consumer |
 |---|---|---|---|
-| `RepositoryPort` | Sentinel Core ↔ GitHub | Read (fetch context) + Write (status/comments) | Analysis Orchestrator |
+| `RepositoryPort` | Sentinel Core ↔ GitHub | Read (changed files) + Write (status/comments) | Analysis Orchestrator |
 | `ScannerPort` | Sentinel Core ↔ Scanner Execution | Invoke (subprocess execution) + Read (results) | Scanner coordination |
+| `WorkingDirectoryPort` | Sentinel Core ↔ GitHub (via `git clone`) | Invoke (checkout) + Write (temp filesystem) + cleanup | Analysis Orchestrator, on behalf of `ScannerPort` |
 | `RiskPort` | Internal to Sentinel Core | Read (compute) | Risk Assessment Service |
 | `PolicyPort` | Internal to Sentinel Core | Read (compute only) — produces a verdict *value*; never writes it | Policy Evaluation Service |
 | `EventBusPort` (Sentinel Core instance) | Internal to Sentinel Core | Publish/subscribe, scoped to Sentinel Core | Analysis Orchestrator and its internal handlers |

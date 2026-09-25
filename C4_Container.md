@@ -143,11 +143,11 @@ This path is described at the depth needed to show the current boundaries don't 
 
 ## 10. Open Architectural Questions
 
-1. **Web/API framework**: FastAPI is the leading candidate (per `Technology_Strategy.md`) but not yet confirmed via `08_Engineering_Research` or locked into an ADR.
-2. **Scanner isolation mechanism for MVP**: whether the first implementation uses bare subprocesses or local Docker containers from day one, or subprocess first with Docker as a fast-follow, is not yet decided.
-3. **DevSecOps interface**: CLI, web UI, or both for the MVP — `Interaction_Model.md` explicitly defers this to a later implementation phase.
-4. **Final domain status vocabulary for degraded outcomes**: e.g., how to name "verdict completed but audit write failed" distinctly from "verdict completed normally" and from "analysis failed entirely" — proposed candidates exist above but are not ratified.
-5. **Notification container boundary**: whether the Notification context talks to external providers directly from the main process (as modeled here) or through a dedicated outbound adapter process, once more than GitHub is in scope.
+1. ~~**Web/API framework**~~ -- **Resolved.** FastAPI, as anticipated. Implemented from Phase 0 (the app factory) through Phase 8 (the full DevSecOps REST surface); async support was used as expected for the concurrent scanner/AI-call model.
+2. ~~**Scanner isolation mechanism for MVP**~~ -- **Resolved.** Bare subprocess, per `Architecture_Patterns.md`'s anti-speculative-generality stance (`infrastructure/core/scanners/subprocess_runner.py`, Phase 5). Docker-based workers remain the documented fast-follow (§9's Evolution Path), not yet built.
+3. **DevSecOps interface**: **Partially resolved.** The full REST API (`API_Contract.md`) is implemented (Phase 8), including the OAuth boundary. A CLI as a thin wrapper over that same API -- confirmed as the intended shape, not a competing interface -- has not been built yet; the webhook remains the product's primary entry point in either case.
+4. ~~**Final domain status vocabulary for degraded outcomes**~~ -- **Resolved** in `docs/04_Data/Error_Handling_and_Resilience.md`: `analysis.status = 'failed'` is the one terminal no-verdict state, disambiguated by `failure_reason` (e.g. `pr_context_retrieval_failed`, `policy_not_configured`); a verdict-critical SQLite write failure is instead surfaced as a `CRITICAL` log event with the Analysis left `running`, never marked `failed` (that status is reserved for "cannot be analyzed," not "couldn't persist"). Audit-write failure is tracked as its own facet, never conflated with verdict status.
+5. **Notification container boundary**: still open -- the Notification context's only implemented channel remains GitHub (the mandatory Commit Status, Phase 4/6); whether additional channels (Slack/Teams/email, Phase 10) talk to external providers directly from the main process or through a dedicated outbound adapter process is not yet decided, since no second channel has been built yet.
 
 ---
 

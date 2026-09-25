@@ -4,10 +4,11 @@
 Provides the per-context detail that `Domain_Model.md` summarizes: internal model, exposed ports, dependencies, boundary rules, and — critically — the Process Model classification (in-process vs. independent process) for each context's runtime components.
 
 ## Identity
-- **Internal model**: User, Organization, Role, Permission.
-- **Ports**: `IdentityPort` (authenticate, authorize).
+- **Internal model (as originally envisioned)**: User, Organization, Role, Permission.
+- **Internal model (as actually built, Phase 8)**: deliberately simplified. `Interaction_Model.md`'s permission table has exactly two rows -- Developer (no direct access at all) and DevSecOps (full access to everything) -- so there is no role differentiation for `IdentityPort` to arbitrate between, and no use case (UC-1..UC-9) ever checks a permission finer-grained than "is this an authenticated DevSecOps session." Building a full User/Organization/Role/Permission model to serve a single implicit role would have been exactly the kind of speculative generality `Architecture_Patterns.md` and `Objectives.md` argue against. What was actually implemented: a `session` table (`Data_Model.md`) mapping an opaque session token to a DevSecOps' GitHub login and an expiry -- that login string *is* the DevSecOps identity, used directly as the `actor` field on Audit Records. If a second role or per-repository permission scoping ever becomes a real requirement, that is a new product decision belonging in `09_Decisions`, not a retroactive reinterpretation of this note.
+- **Ports (as built)**: no `IdentityPort` — authentication is `interfaces/http/middleware/auth.py`'s `require_devsecops_session` FastAPI dependency, checked directly against the `session` table. This is an interfaces-layer concern, not a Sentinel Core domain port, precisely because there is no domain decision being made (no role/permission logic) — only "does a valid, unexpired session exist."
 - **Depends on**: nothing else.
-- **Boundary rule**: no other context implements its own auth logic; all authorization checks go through `IdentityPort`.
+- **Boundary rule**: no other context implements its own auth logic; every DevSecOps-facing route goes through the one shared dependency.
 - **Process model**: in-process.
 
 ## Repository
