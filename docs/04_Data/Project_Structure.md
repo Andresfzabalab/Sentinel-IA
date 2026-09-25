@@ -135,7 +135,7 @@ No file, class, or directory anywhere in `src/sentinel/` is named `*Repository` 
 ## `tests/`, `scripts/`, `configs/`
 
 - **`tests/`** mirrors `src/sentinel/`'s module structure (`tests/core/`, `tests/intelligence/`, `tests/ai_agent/`, `tests/infrastructure/`, `tests/interfaces/`), plus `tests/integration/`, `tests/contract/`, and `tests/e2e/` for cross-cutting suites — fully specified in `Testing_Strategy.md`.
-- **`scripts/`** holds operational, run-once-by-a-human scripts: the migration runner (`Persistence_Strategy.md`), a manual trigger for the crash-recovery sweep, and local developer setup. Nothing here is imported by `src/sentinel/` — scripts call into the application layer, never the reverse.
+- **`scripts/`** holds operational, run-once-by-a-human scripts: the migration runner (`Persistence_Strategy.md`), a manual trigger for the crash-recovery sweep, local developer setup, and the manual Knowledge Base refresh (`refresh_knowledge_base.py`, `AI_Agent_Architecture.md` §11) — the one deliberate, human-triggered point where SentinelAI reaches the public internet; nothing else in the running process ever does. Nothing here is imported by `src/sentinel/` — scripts call into the application layer, never the reverse.
 - **`configs/`** holds static, non-secret configuration read at startup: default scanner timeouts, the artifact classification rule set, and which scanners exist system-wide (`Configuration_and_Secrets.md`'s "Scanner configuration" row). Nothing secret is ever placed here — see `Configuration_and_Secrets.md` for what belongs in `.env` instead.
 
 ## Import Direction Summary
