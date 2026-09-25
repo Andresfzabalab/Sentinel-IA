@@ -69,3 +69,51 @@ def test_core_ports_never_imports_infrastructure() -> None:
                 offending.append(f"{py_file}: imports {module!r}")
 
     assert offending == [], "core/ports/ must never import sentinel.infrastructure:\n" + "\n".join(offending)
+
+
+def test_ai_agent_and_intelligence_application_never_import_infrastructure_or_each_others_application() -> None:
+    """Module_Boundaries.md's one-way dependency direction, applied to the
+    two modules Phase 9 introduced: ai_agent/application/ and
+    intelligence/application/ may depend on their own module's domain/ports
+    (plus, for ai_agent only, the documented AuditRecord type-sharing
+    exception in core.domain.audit -- never on core.application, never on
+    infrastructure directly, and never on each other's application/ layer.
+    """
+    offending: list[str] = []
+    for module_name in ("ai_agent", "intelligence"):
+        for py_file in _files_under(module_name, "application"):
+            for module in _imported_top_level_modules(py_file):
+                if module.startswith("sentinel.infrastructure"):
+                    offending.append(f"{py_file}: imports {module!r}")
+                if module.startswith("sentinel.core.application"):
+                    offending.append(f"{py_file}: imports {module!r}")
+                other = "intelligence" if module_name == "ai_agent" else "ai_agent"
+                if module.startswith(f"sentinel.{other}.application"):
+                    offending.append(f"{py_file}: imports {module!r}")
+
+    assert offending == [], (
+        "ai_agent/application/ and intelligence/application/ must never import "
+        "sentinel.infrastructure, sentinel.core.application, or each other's application/:\n"
+        + "\n".join(offending)
+    )
+
+
+def test_ai_agent_and_intelligence_domain_never_import_infrastructure_or_core() -> None:
+    """P-06 applied to Phase 9's two new modules: domain code owns no
+    dependency on infrastructure, ports, or Sentinel Core.
+    """
+    offending: list[str] = []
+    for module_name in ("ai_agent", "intelligence"):
+        for py_file in _files_under(module_name, "domain"):
+            for module in _imported_top_level_modules(py_file):
+                if (
+                    module.startswith("sentinel.infrastructure")
+                    or module.startswith("sentinel.core")
+                    or module.startswith(f"sentinel.{module_name}.ports")
+                ):
+                    offending.append(f"{py_file}: imports {module!r}")
+
+    assert offending == [], (
+        "ai_agent/domain/ and intelligence/domain/ must never import "
+        "sentinel.infrastructure, sentinel.core, or their own module's ports/:\n" + "\n".join(offending)
+    )

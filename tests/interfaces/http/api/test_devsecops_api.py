@@ -196,10 +196,14 @@ def test_full_devsecops_flow_authenticate_trigger_poll_report_audit(client, gith
     body = detail_response.json()
     assert body["securityResult"]["verdict"] in ("PASS", "BLOCK")
 
-    # Read the report, both audiences.
+    # Read the report, both audiences. The relay-triggered Security
+    # Investigation Agent run completes synchronously in-process here; with
+    # no findings to investigate it reaches "complete" with zero
+    # enrichments without ever calling the (unconfigured, Phase 9) AI
+    # provider.
     devsecops_report = client.get(f"/analyses/{analysis_id}/report", params={"audience": "devsecops"})
     assert devsecops_report.status_code == 200
-    assert devsecops_report.json()["aiSection"]["status"] == "pending"
+    assert devsecops_report.json()["aiSection"]["status"] == "complete"
 
     developer_report = client.get(f"/analyses/{analysis_id}/report", params={"audience": "developer"})
     assert developer_report.status_code == 200

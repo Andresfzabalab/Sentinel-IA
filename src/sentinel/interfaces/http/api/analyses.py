@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from pydantic import BaseModel
 
+from sentinel.ai_agent.application.report_generation_service import AnalysisNotCompleteError
 from sentinel.core.application.analysis_orchestrator import AnalysisTrigger
-from sentinel.core.application.report_generation_service import AnalysisNotCompleteError, generate_report
 from sentinel.core.domain.services.artifact_classification import ChangedFile
 from sentinel.infrastructure.core.github.client import GitHubClientError
 from sentinel.infrastructure.core.github.repository_port_adapter import split_external_identifier
@@ -167,13 +167,12 @@ async def get_report(
         raise ApiError(400, "INVALID_AUDIENCE", "audience must be 'developer' or 'devsecops'")
 
     deps = request.app.state.deps
-    try:
-        analysis = deps.analysis_store_adapter.load(analysis_id)
-    except KeyError:
+    row = deps.analysis_store.get_analysis(analysis_id)
+    if row is None:
         raise ApiError(404, "ANALYSIS_NOT_FOUND", f"analysis {analysis_id!r} not found")
 
     try:
-        report = generate_report(analysis, audience, generated_at=_utc_now_iso())
+        report = deps.report_generation_service.generate(analysis_id, audience, generated_at=_utc_now_iso())
     except AnalysisNotCompleteError:
         raise ApiError(409, "ANALYSIS_NOT_COMPLETE", f"analysis {analysis_id!r} has no report yet")
 
