@@ -159,7 +159,7 @@ def build_dependencies(
     )
 
     repository_configuration_service = RepositoryConfigurationService(
-        SqliteRepositoryConfigStoreAdapter(repository_config_store), audit_store_adapter
+        SqliteRepositoryConfigStoreAdapter(repository_config_store), audit_store_adapter, SqlitePolicyStoreAdapter(policy_store)
     )
     policy_publishing_service = PolicyPublishingService(SqlitePolicyStoreAdapter(policy_store), audit_store_adapter)
 

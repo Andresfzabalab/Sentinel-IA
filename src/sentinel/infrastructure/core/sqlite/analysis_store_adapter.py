@@ -31,6 +31,10 @@ from sentinel.infrastructure.core.sqlite.analysis_store import (
     SqliteAnalysisStore,
     T3Finalize,
 )
+from sentinel.shared.logging import get_logger
+from sentinel.shared.retry import retry_critical_write
+
+_logger = get_logger("core", "SqliteAnalysisStoreAdapter")
 
 
 class SqliteAnalysisStoreAdapter:
@@ -74,7 +78,10 @@ class SqliteAnalysisStoreAdapter:
             )
             for se in analysis.scanner_executions
         )
-        return self._store.create_analysis(create, artifacts, scanner_executions)
+        return retry_critical_write(
+            lambda: self._store.create_analysis(create, artifacts, scanner_executions),
+            logger=_logger, event="t1_write", correlation_id=analysis.correlation_id, analysis_id=analysis.id,
+        )
 
     def create_failed(self, analysis: Analysis) -> str:
         pr = analysis.pr_snapshot
@@ -90,7 +97,10 @@ class SqliteAnalysisStoreAdapter:
             pr_base_branch=pr.base_branch if pr else None,
             pr_author=pr.author if pr else None,
         )
-        return self._store.create_failed_analysis(failed)
+        return retry_critical_write(
+            lambda: self._store.create_failed_analysis(failed),
+            logger=_logger, event="t1_failed_write", correlation_id=analysis.correlation_id, analysis_id=analysis.id,
+        )
 
     def complete_scanner_execution(
         self, analysis_id: str, execution: ScannerExecution, findings: tuple[Finding, ...]
@@ -141,7 +151,10 @@ class SqliteAnalysisStoreAdapter:
                 for f in analysis.findings
             ),
         )
-        self._store.finalize_verdict(finalize)
+        retry_critical_write(
+            lambda: self._store.finalize_verdict(finalize),
+            logger=_logger, event="t3_write", correlation_id=analysis.correlation_id, analysis_id=analysis.id,
+        )
 
     def load(self, analysis_id: str) -> Analysis:
         """Reconstructs the full domain Aggregate from its persisted rows.

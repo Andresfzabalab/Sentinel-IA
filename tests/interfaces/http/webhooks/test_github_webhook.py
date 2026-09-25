@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 
 import httpx
 import pytest
@@ -205,6 +206,125 @@ def test_opened_pull_request_reaches_a_persisted_verdict_and_a_commit_status_pos
     notification_rows = SqliteNotificationStore(client.dependencies.connection).get_by_analysis_id(analysis_id)
     channels = {n["channel"]: n["status"] for n in notification_rows}
     assert channels == {"github-status": "delivered", "github-comment": "delivered"}
+
+
+class _CollectingHandler(logging.Handler):
+    """Attached directly to the root logger (after `configure_logging()`
+    already ran during the `client` fixture's setup) so log records are
+    captured regardless of stdout/capsys timing -- `configure_logging()`
+    clears root handlers once at app startup, but adding a second handler
+    afterward, from the test itself, coexists with it fine.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+def test_a_completed_analysis_is_reconstructable_purely_from_logs(client, github_calls) -> None:
+    """Phase 11's proof criterion (Implementation_Strategy.md): a complete
+    Analysis's story -- webhook receipt through to Commit Status post -- is
+    reconstructable purely from logs plus the Audit trail, for a
+    successful run. This test proves the log half: T1/T3 and the
+    Notification delivery must appear as structured log lines, all
+    correlatable by the one identifier guaranteed to exist throughout
+    (`correlationId`, per `Observability_and_Logging.md`'s "Diagnosing a
+    Complete Analysis"). T2 (per-scanner) logging is proven separately
+    (tests/core/application/test_analysis_orchestrator.py) since this
+    fixture's changed-file list is always empty, so no scanner is ever
+    selected here.
+    """
+    collector = _CollectingHandler()
+    logging.getLogger().addHandler(collector)
+    try:
+        body = json.dumps(_pull_request_payload(action="opened", head_sha="sha-logs")).encode("utf-8")
+        response = client.post(
+            "/webhooks/github", content=body,
+            headers={"X-Hub-Signature-256": _sign(body), "X-GitHub-Event": "pull_request"},
+        )
+    finally:
+        logging.getLogger().removeHandler(collector)
+
+    correlation_id = response.json()["correlationId"]
+    matching = [r for r in collector.records if getattr(r, "correlation_id", None) == correlation_id]
+    events = {getattr(r, "event", None) for r in matching}
+
+    assert "t1_committed" in events
+    assert "t3_committed" in events
+    assert "notification_delivered" in events
+    # Every line for this correlationId from T1 onward also carries analysisId.
+    analysis_id = client.dependencies.analysis_store.find_analysis_id_by_correlation_id(correlation_id)
+    t3_record = next(r for r in matching if getattr(r, "event", None) == "t3_committed")
+    assert t3_record.analysis_id == analysis_id
+
+
+def test_a_pr_retrieval_failure_is_reconstructable_purely_from_logs(tmp_path) -> None:
+    """Same proof, for the `failed`/degraded path: no verdict is ever
+    produced, but the story -- webhook receipt, retrieval failure, T1-Failed
+    -- must still be fully visible in the logs. Builds its own client with a
+    transport that always fails PR-files retrieval, rather than reusing the
+    shared `mock_github_transport` (which always succeeds).
+    """
+
+    def failing_handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and "/pulls/" in request.url.path and request.url.path.endswith("/files"):
+            return httpx.Response(500)
+        if request.method == "POST" and "/statuses/" in request.url.path:
+            return httpx.Response(201)
+        return httpx.Response(404)
+
+    db_path = tmp_path / "webhook_failure_test.sqlite"
+    settings = _settings(str(db_path))
+    dependencies = build_dependencies(
+        settings, github_transport=httpx.MockTransport(failing_handler), working_directory_port=NullWorkingDirectoryPort()
+    )
+    create_full_schema(dependencies.connection)
+    policy_store = SqlitePolicyStore(dependencies.connection)
+    policy_store.create_policy(PolicyCreate(id="policy-1", created_at="t0"))
+    policy_store.publish_version(
+        PolicyVersionPublish(
+            id="policy-1-v1", policy_id="policy-1", version_number=1,
+            rules=json.dumps({"blockOnSeverity": "critical"}), published_at="t0", published_by="devsecops-1",
+        )
+    )
+    SqliteRepositoryConfigStore(dependencies.connection).create_repository(
+        RepositoryCreate(
+            id="repo-1", external_identifier="acme/widgets", enabled_scanners=json.dumps(["semgrep"]),
+            assigned_policy_id="policy-1", created_at="t0", updated_at="t0",
+        )
+    )
+    app = create_app(settings=settings, dependencies=dependencies)
+    test_client = TestClient(app)
+
+    collector = _CollectingHandler()
+    logging.getLogger().addHandler(collector)
+    try:
+        body = json.dumps(_pull_request_payload(action="opened", head_sha="sha-fail")).encode("utf-8")
+        response = test_client.post(
+            "/webhooks/github", content=body,
+            headers={"X-Hub-Signature-256": _sign(body), "X-GitHub-Event": "pull_request"},
+        )
+    finally:
+        logging.getLogger().removeHandler(collector)
+
+    correlation_id = response.json()["correlationId"]
+    analysis_id = dependencies.analysis_store.find_analysis_id_by_correlation_id(correlation_id)
+    row = dependencies.analysis_store.get_analysis(analysis_id)
+    assert row["status"] == "failed"
+    assert row["failure_reason"] == "pr_context_retrieval_failed"
+
+    matching = [r for r in collector.records if getattr(r, "correlation_id", None) == correlation_id]
+    events = {getattr(r, "event", None) for r in matching}
+
+    assert "t1_failed_committed" in events
+    t1_failed_record = next(r for r in matching if getattr(r, "event", None) == "t1_failed_committed")
+    assert t1_failed_record.levelname == "INFO"  # correct-by-design, never ERROR (Observability_and_Logging.md)
+    assert t1_failed_record.analysis_id == analysis_id
+
+    dependencies.connection.close()
 
 
 def test_redelivered_webhook_is_idempotent_end_to_end(client) -> None:

@@ -23,6 +23,9 @@ from sentinel.ai_agent.ports.ai_provider_port import AIProviderUnavailable
 from sentinel.ai_agent.ports.security_result_query_port import SecurityResultQueryPort
 from sentinel.ai_agent.ports.store_ports import AgentExecutionStore, AuditRecorderPort
 from sentinel.core.domain.audit.entities import AuditRecord
+from sentinel.shared.logging import get_logger
+
+_logger = get_logger("ai_agent", "AgentExecutionRunner")
 
 
 def _utc_now_iso() -> str:
@@ -74,6 +77,10 @@ class AgentExecutionRunner:
         )
         self._agent_execution_store.start(execution)
         self._record_audit(execution, "AgentExecutionStarted", {})
+        _logger.info(
+            "agent_execution_started", f"Agent execution {execution.id} started for analysis {analysis_id}",
+            correlation_id=correlation_id, analysis_id=analysis_id, agent_execution_id=execution.id,
+        )
 
         context = AgentExecutionContext(definition=definition, clock=self._clock)
 
@@ -82,17 +89,25 @@ class AgentExecutionRunner:
                 context, security_result,
                 enrichment_id_factory=self._id_factory, agent_execution_id=execution.id, created_at=self._clock(),
             )
-        except AIProviderUnavailable:
+        except AIProviderUnavailable as exc:
             execution.tool_calls_log = list(context.tool_calls)
             execution.mark_pending_unavailable()
             self._agent_execution_store.complete(execution)
             self._record_audit(execution, "AgentExecutionPending", {"reason": "ai_provider_unavailable"})
+            _logger.warning(
+                "agent_execution_pending_unavailable", f"AI provider unavailable: {exc}",
+                correlation_id=correlation_id, analysis_id=analysis_id, agent_execution_id=execution.id,
+            )
             return
         except Exception as exc:  # noqa: BLE001 -- a framework/agent bug must never propagate upstream (see docstring)
             execution.tool_calls_log = list(context.tool_calls)
             execution.mark_pending_unavailable()
             self._agent_execution_store.complete(execution)
             self._record_audit(execution, "AgentExecutionPending", {"reason": f"unexpected_error: {exc}"})
+            _logger.error(
+                "agent_execution_unexpected_error", f"Agent execution {execution.id} failed unexpectedly: {exc}",
+                correlation_id=correlation_id, analysis_id=analysis_id, agent_execution_id=execution.id,
+            )
             return
 
         for enrichment in result.enrichments:
@@ -105,6 +120,10 @@ class AgentExecutionRunner:
         self._record_audit(
             execution, "AgentExecutionCompleted",
             {"enrichmentCount": len(result.enrichments), "knowledgeBaseEntriesUsed": list(result.knowledge_base_entries_used)},
+        )
+        _logger.info(
+            "agent_execution_completed", f"Agent execution {execution.id} completed with {len(result.enrichments)} enrichment(s)",
+            correlation_id=correlation_id, analysis_id=analysis_id, agent_execution_id=execution.id,
         )
 
     def _record_audit(self, execution: AgentExecution, event_type: str, extra_payload: dict) -> None:

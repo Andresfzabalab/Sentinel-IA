@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from sentinel.core.domain.exceptions import RepositoryMissingPolicy
+from sentinel.core.domain.exceptions import EmptyEnabledScanners, RepositoryMissingPolicy
 
 
 @dataclass
@@ -43,6 +43,9 @@ class Repository:
         """
         if assigned_policy_id is not None and not assigned_policy_id:
             raise RepositoryMissingPolicy(f"repository {self.id!r} cannot be updated with an empty policy id")
+
+        if enabled_scanners is not None and len(enabled_scanners) == 0:
+            raise EmptyEnabledScanners(f"repository {self.id!r} cannot be updated with an empty enabledScanners list")
 
         if enabled_scanners is not None:
             self.enabled_scanners = enabled_scanners

@@ -31,3 +31,10 @@ class DuplicatePolicyVersion(RuntimeError):
 
 class RepositoryMissingPolicy(RuntimeError):
     """A Repository was constructed or updated with no assigned Policy."""
+
+
+class EmptyEnabledScanners(RuntimeError):
+    """A Repository configuration update supplied an empty enabledScanners
+    list -- the request requires at least one (Error_Handling_and_Resilience.md's
+    "Invalid configuration submitted" row).
+    """

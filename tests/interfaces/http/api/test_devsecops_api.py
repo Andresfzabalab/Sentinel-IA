@@ -303,6 +303,32 @@ def test_update_unknown_repository_is_404(client) -> None:
     assert response.status_code == 404
 
 
+def test_update_repository_config_with_an_empty_enabled_scanners_list_is_400(client) -> None:
+    """Error_Handling_and_Resilience.md's 'Invalid configuration submitted'
+    row: an empty enabledScanners list is rejected before anything is
+    written, not silently accepted as 'no scanners run'.
+    """
+    _authenticate(client)
+
+    response = client.post("/repositories/repo-1/config", json={"enabledScanners": []})
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_CONFIGURATION"
+
+
+def test_update_repository_config_pointing_at_a_nonexistent_policy_is_400(client) -> None:
+    """Same row: a Repository must never be pointed at a Policy that
+    cannot actually be evaluated, rejected at configuration time rather
+    than discovered later when an Analysis tries to evaluate against it.
+    """
+    _authenticate(client)
+
+    response = client.post("/repositories/repo-1/config", json={"assignedPolicyId": "does-not-exist"})
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_CONFIGURATION"
+
+
 def test_publish_policy_version(client) -> None:
     _authenticate(client)
 

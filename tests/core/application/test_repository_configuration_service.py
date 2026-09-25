@@ -10,10 +10,11 @@ from sentinel.core.application.repository_configuration_service import (
     RepositoryConfigurationService,
     RepositoryRegistration,
 )
-from sentinel.core.domain.exceptions import RepositoryMissingPolicy
+from sentinel.core.domain.exceptions import EmptyEnabledScanners, RepositoryMissingPolicy
 from sentinel.infrastructure.core.sqlite.audit_store import SqliteAuditStore
 from sentinel.infrastructure.core.sqlite.audit_store_adapter import SqliteAuditStoreAdapter
-from sentinel.infrastructure.core.sqlite.policy_store import PolicyCreate, SqlitePolicyStore
+from sentinel.infrastructure.core.sqlite.policy_store import PolicyCreate, PolicyVersionPublish, SqlitePolicyStore
+from sentinel.infrastructure.core.sqlite.policy_store_adapter import SqlitePolicyStoreAdapter
 from sentinel.infrastructure.core.sqlite.repository_config_store import SqliteRepositoryConfigStore
 from sentinel.infrastructure.core.sqlite.repository_config_store_adapter import (
     SqliteRepositoryConfigStoreAdapter,
@@ -22,10 +23,18 @@ from sentinel.infrastructure.core.sqlite.repository_config_store_adapter import 
 
 @pytest.fixture()
 def service(sqlite_conn):
-    SqlitePolicyStore(sqlite_conn).create_policy(PolicyCreate(id="policy-1", created_at="t0"))
+    policy_store = SqlitePolicyStore(sqlite_conn)
+    policy_store.create_policy(PolicyCreate(id="policy-1", created_at="t0"))
+    policy_store.publish_version(
+        PolicyVersionPublish(
+            id="policy-1-v1", policy_id="policy-1", version_number=1,
+            rules="{}", published_at="t0", published_by="devsecops-1",
+        )
+    )
     return RepositoryConfigurationService(
         SqliteRepositoryConfigStoreAdapter(SqliteRepositoryConfigStore(sqlite_conn)),
         SqliteAuditStoreAdapter(SqliteAuditStore(sqlite_conn)),
+        SqlitePolicyStoreAdapter(policy_store),
         clock=lambda: "2026-01-01T00:00:00Z",
     )
 
@@ -79,3 +88,34 @@ def test_update_to_an_empty_policy_id_is_rejected_never_leaves_a_repository_with
 
     with pytest.raises(RepositoryMissingPolicy):
         service.update("repo-1", RepositoryConfigurationChange(assigned_policy_id=""), actor="devsecops-1")
+
+
+def test_update_to_an_empty_enabled_scanners_list_is_rejected(service):
+    service.register(
+        RepositoryRegistration(
+            id="repo-1", external_identifier="acme/widgets", assigned_policy_id="policy-1",
+            enabled_scanners=("semgrep",),
+        ),
+        actor="devsecops-1",
+    )
+
+    with pytest.raises(EmptyEnabledScanners):
+        service.update("repo-1", RepositoryConfigurationChange(enabled_scanners=()), actor="devsecops-1")
+
+
+def test_update_pointing_at_a_nonexistent_policy_is_rejected(service):
+    service.register(
+        RepositoryRegistration(id="repo-1", external_identifier="acme/widgets", assigned_policy_id="policy-1"),
+        actor="devsecops-1",
+    )
+
+    with pytest.raises(RepositoryMissingPolicy):
+        service.update("repo-1", RepositoryConfigurationChange(assigned_policy_id="does-not-exist"), actor="devsecops-1")
+
+
+def test_register_pointing_at_a_nonexistent_policy_is_rejected(service):
+    with pytest.raises(RepositoryMissingPolicy):
+        service.register(
+            RepositoryRegistration(id="repo-2", external_identifier="acme/other", assigned_policy_id="does-not-exist"),
+            actor="devsecops-1",
+        )

@@ -13,6 +13,9 @@ from typing import Any
 
 from sentinel.core.ports.scanner_port import NormalizedFindingData, ScannerRunResult
 from sentinel.infrastructure.core.scanners.subprocess_runner import run_scanner_subprocess
+from sentinel.shared.logging import get_logger
+
+_logger = get_logger("core", "ScannerAdapter")
 
 
 def run_and_parse_json_scanner(
@@ -38,6 +41,10 @@ def run_and_parse_json_scanner(
         try:
             raw = json.loads(stdout)
         except json.JSONDecodeError as exc:
+            _logger.error(
+                "scanner_adapter_internal_exception", f"could not parse scanner output as JSON: {exc}",
+                detail={"command": command[0] if command else None},
+            )
             return ScannerRunResult(
                 status="failed", exit_code=outcome.exit_code,
                 failure_note=f"could not parse output as JSON: {exc}",
@@ -46,6 +53,10 @@ def run_and_parse_json_scanner(
     try:
         findings = parse(raw)
     except (KeyError, TypeError, AttributeError, IndexError) as exc:
+        _logger.error(
+            "scanner_adapter_internal_exception", f"could not interpret scanner output shape: {exc}",
+            detail={"command": command[0] if command else None},
+        )
         return ScannerRunResult(
             status="failed", exit_code=outcome.exit_code,
             failure_note=f"could not interpret scanner output shape: {exc}",

@@ -42,6 +42,9 @@ from sentinel.core.ports.risk_port import RiskPort
 from sentinel.core.ports.scanner_port import ScannerPort, ScannerRunResult
 from sentinel.core.ports.store_ports import AnalysisStore, AuditStore, NotificationStore, PolicyStore, RepositoryConfigStore
 from sentinel.core.ports.working_directory_port import WorkingDirectoryError, WorkingDirectoryPort
+from sentinel.shared.logging import get_logger
+
+_logger = get_logger("core", "AnalysisOrchestrator")
 
 
 def _utc_now_iso() -> str:
@@ -121,6 +124,10 @@ class AnalysisOrchestrator:
         """
         existing_id = self._analysis_store.find_existing_id(trigger.correlation_id)
         if existing_id is not None:
+            _logger.info(
+                "analysis_duplicate_trigger", "Duplicate trigger for an already-processed correlationId",
+                correlation_id=trigger.correlation_id, analysis_id=existing_id,
+            )
             return existing_id
 
         analysis_id = self._id_factory()
@@ -184,7 +191,17 @@ class AnalysisOrchestrator:
         persisted_id = self._analysis_store.create_or_get(analysis)
         if persisted_id != analysis.id:
             # A concurrent identical trigger won the race -- duplicate, stop here.
+            _logger.info(
+                "analysis_duplicate_trigger", "Concurrent trigger lost the T1 race for the same correlationId",
+                correlation_id=trigger.correlation_id, analysis_id=persisted_id,
+            )
             return persisted_id
+
+        _logger.info(
+            "t1_committed", f"T1 committed: analysis {analysis.id} created, {len(scanner_executions)} scanner(s) selected",
+            correlation_id=trigger.correlation_id, analysis_id=analysis.id,
+            detail={"selectedScanners": list(selected_scanner_ids)},
+        )
 
         self._run_scanners(analysis, repository)
         self._finalize(analysis, policy_version)
@@ -205,6 +222,12 @@ class AnalysisOrchestrator:
         )
         persisted_id = self._analysis_store.create_failed(failed)
 
+        _logger.info(
+            "t1_failed_committed", "T1-Failed committed: PR context could not be retrieved, no verdict will be produced",
+            correlation_id=trigger.correlation_id, analysis_id=persisted_id,
+            detail={"failureReason": "pr_context_retrieval_failed"},
+        )
+
         self._audit_store.append(
             AuditRecord(
                 id=f"{persisted_id}-audit-failed",
@@ -224,6 +247,7 @@ class AnalysisOrchestrator:
                 trigger.head_commit_sha,
                 persisted_id,
                 AnalysisResultSummary(verdict="ERROR", description="Could not retrieve PR context — analysis did not run"),
+                correlation_id=trigger.correlation_id,
             )
 
         return persisted_id
@@ -301,6 +325,13 @@ class AnalysisOrchestrator:
                 analysis.id, analysis.find_scanner_execution(execution.scanner_id), findings
             )
 
+        log = _logger.info if result.status == "succeeded" else _logger.warning
+        log(
+            "t2_committed", f"T2 committed: scanner {execution.scanner_id} {result.status}, {len(findings)} finding(s)",
+            correlation_id=analysis.correlation_id, analysis_id=analysis.id, scanner_execution_id=execution.id,
+            detail={"scannerId": execution.scanner_id, "status": result.status, "findingCount": len(findings)},
+        )
+
         self._event_bus.publish(
             "ScannerExecutionCompleted",
             {"correlationId": analysis.correlation_id, "analysisId": analysis.id,
@@ -347,6 +378,13 @@ class AnalysisOrchestrator:
             completed_at=self._clock(),
         )
         self._analysis_store.finalize(analysis)
+
+        _logger.info(
+            "t3_committed", f"T3 committed: verdict={analysis.verdict.value}, score={security_score.value}",
+            correlation_id=analysis.correlation_id, analysis_id=analysis.id,
+            detail={"verdict": analysis.verdict.value, "securityScore": security_score.value,
+                    "degradationAnyScannerFailed": degradation_any_scanner_failed},
+        )
 
         self._event_bus.publish(
             "PolicyEvaluated",
@@ -395,11 +433,20 @@ class AnalysisOrchestrator:
            genuinely completed before the crash (P-09/QA-03), never a
            second hang.
         """
-        self._analysis_store.recover_stale_scanner_executions(
+        _logger.info("recovery_sweep_started", "Startup recovery sweep beginning")
+
+        recovered_ids = self._analysis_store.recover_stale_scanner_executions(
             "process restarted mid-execution", self._clock()
         )
+        if recovered_ids:
+            _logger.warning(
+                "recovery_sweep_scanners_recovered",
+                f"{len(recovered_ids)} analysis(es) had stale scanner executions marked failed after a restart",
+                detail={"analysisIds": list(recovered_ids)},
+            )
 
-        for analysis_id in self._analysis_store.find_running_analysis_ids():
+        running_ids = self._analysis_store.find_running_analysis_ids()
+        for analysis_id in running_ids:
             analysis = self._analysis_store.load(analysis_id)
             if not analysis.all_scanner_executions_terminal:
                 continue  # cannot happen after the sweep above, guarded for clarity/safety
@@ -412,3 +459,8 @@ class AnalysisOrchestrator:
                 self._publish_result(repository, analysis)
             except Exception:  # noqa: BLE001 -- notification is best-effort; the verdict is already recorded
                 pass
+
+        _logger.info(
+            "recovery_sweep_completed", f"Startup recovery sweep completed: {len(running_ids)} analysis(es) finalized",
+            detail={"finalizedCount": len(running_ids)},
+        )

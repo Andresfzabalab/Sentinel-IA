@@ -22,6 +22,9 @@ from sentinel.core.domain.analysis.entities import Analysis
 from sentinel.core.domain.notification.entities import Notification
 from sentinel.core.ports.repository_port import AnalysisResultSummary, RepositoryPort
 from sentinel.core.ports.store_ports import NotificationStore
+from sentinel.shared.logging import get_logger
+
+_logger = get_logger("core", "NotificationDispatchService")
 
 
 class NotificationDispatchService:
@@ -47,17 +50,25 @@ class NotificationDispatchService:
             analysis.pr_snapshot.head_commit_sha,
             analysis.id,
             AnalysisResultSummary(verdict=analysis.verdict.value, description=description),
+            correlation_id=analysis.correlation_id,
         )
         self._deliver_summary_comment(repository.external_identifier, analysis)
 
     def deliver_status(
-        self, external_identifier: str, head_commit_sha: str, analysis_id: str, result: AnalysisResultSummary
+        self, external_identifier: str, head_commit_sha: str, analysis_id: str, result: AnalysisResultSummary,
+        *, correlation_id: str | None = None,
     ) -> None:
         try:
             delivered = self._repository_port.publish_result(external_identifier, head_commit_sha, result)
         except Exception:  # noqa: BLE001 -- a Notification failure must never affect the verdict already decided
             delivered = False
 
+        log = _logger.info if delivered else _logger.error
+        log(
+            "notification_delivered" if delivered else "notification_delivery_failed",
+            f"github-status delivery {'succeeded' if delivered else 'failed'} for analysis {analysis_id}",
+            correlation_id=correlation_id, analysis_id=analysis_id, detail={"channel": "github-status", "verdict": result.verdict},
+        )
         self._record_attempt(analysis_id, "github-status", delivered, f'{{"verdict": "{result.verdict}", "description": "{result.description}"}}')
 
     def _deliver_summary_comment(self, external_identifier: str, analysis: Analysis) -> None:
@@ -69,6 +80,12 @@ class NotificationDispatchService:
         except Exception:  # noqa: BLE001 -- same Notification-not-verdict isolation as the status channel
             delivered = False
 
+        log = _logger.info if delivered else _logger.error
+        log(
+            "notification_delivered" if delivered else "notification_delivery_failed",
+            f"github-comment delivery {'succeeded' if delivered else 'failed'} for analysis {analysis.id}",
+            correlation_id=analysis.correlation_id, analysis_id=analysis.id, detail={"channel": "github-comment"},
+        )
         self._record_attempt(analysis.id, "github-comment", delivered, body)
 
     def _record_attempt(self, analysis_id: str, channel: str, delivered: bool, content_snapshot: str) -> None:

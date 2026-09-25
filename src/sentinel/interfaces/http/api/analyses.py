@@ -15,6 +15,7 @@ from sentinel.core.domain.services.artifact_classification import ChangedFile
 from sentinel.infrastructure.core.github.client import GitHubClientError
 from sentinel.infrastructure.core.github.repository_port_adapter import split_external_identifier
 from sentinel.interfaces.http.middleware.auth import require_devsecops_session
+from sentinel.shared.contracts import CONTRACT_VERSION
 from sentinel.shared.correlation import derive_mode_a_correlation_id, derive_mode_b_correlation_id
 from sentinel.shared.errors import ApiError
 
@@ -136,9 +137,10 @@ async def get_analysis(
     if row["status"] == "completed":
         findings = deps.analysis_store.get_findings(analysis_id)
         security_result = {
+            "contractVersion": CONTRACT_VERSION,
             "analysisId": analysis_id,
             "correlationId": row["correlation_id"],
-            "findings": [dict(f) for f in findings],
+            "findings": [{"contractVersion": CONTRACT_VERSION, **dict(f)} for f in findings],
             "securityScore": row["security_score"],
             "policyVersionId": row["policy_version_id"],
             "verdict": row["verdict"],
@@ -177,6 +179,7 @@ async def get_report(
         raise ApiError(409, "ANALYSIS_NOT_COMPLETE", f"analysis {analysis_id!r} has no report yet")
 
     return {
+        "contractVersion": CONTRACT_VERSION,
         "reportId": report.report_id,
         "analysisId": report.analysis_id,
         "audience": report.audience,

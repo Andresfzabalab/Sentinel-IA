@@ -16,6 +16,9 @@ from sentinel.intelligence.domain.entities import SecurityKnowledgeBaseEntry
 from sentinel.intelligence.domain.exceptions import DuplicateKnowledgeBaseEntry
 from sentinel.intelligence.ports.knowledge_base_store import KnowledgeBaseStore
 from sentinel.intelligence.ports.security_intelligence_source_port import SecurityIntelligenceSourcePort
+from sentinel.shared.logging import get_logger
+
+_logger = get_logger("intelligence", "KnowledgeRefreshService")
 
 
 def _utc_now_iso() -> str:
@@ -39,6 +42,10 @@ class KnowledgeRefreshService:
         for topic in topics:
             content = self._source.fetch(topic)
             if content is None:
+                _logger.warning(
+                    "knowledge_refresh_topic_skipped", f"No content available for topic {topic!r} this refresh cycle",
+                    detail={"topic": topic},
+                )
                 continue  # this source has nothing for this topic -- not an error
 
             existing = self._store.get_latest(topic)
@@ -53,6 +60,10 @@ class KnowledgeRefreshService:
             try:
                 self._store.publish(entry)
                 updated.append(topic)
+                _logger.info(
+                    "knowledge_refresh_topic_updated", f"Topic {topic!r} updated to version {next_version}",
+                    detail={"topic": topic, "version": next_version},
+                )
             except DuplicateKnowledgeBaseEntry:
                 continue  # a concurrent refresh already published this version -- not an error
 

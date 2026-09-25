@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from sentinel.core.domain.audit.entities import AuditRecord
 from sentinel.core.domain.repository.entities import Repository
-from sentinel.core.ports.store_ports import AuditStore, RepositoryConfigStore
+from sentinel.core.ports.store_ports import AuditStore, PolicyStore, RepositoryConfigStore
 
 
 def _utc_now_iso() -> str:
@@ -46,14 +46,22 @@ class RepositoryConfigurationService:
         self,
         repository_config_store: RepositoryConfigStore,
         audit_store: AuditStore,
+        policy_store: PolicyStore,
         *,
         clock: "callable[[], str]" = _utc_now_iso,
     ) -> None:
         self._repository_config_store = repository_config_store
         self._audit_store = audit_store
+        self._policy_store = policy_store
         self._clock = clock
 
     def register(self, registration: RepositoryRegistration, *, actor: str) -> Repository:
+        # Raises RepositoryMissingPolicy if the policy has no published
+        # version -- a Repository must never be registered pointing at a
+        # Policy that cannot actually be evaluated (Error_Handling_and_Resilience.md's
+        # "Invalid configuration submitted" row).
+        self._policy_store.get_current_policy_version(registration.assigned_policy_id)
+
         now = self._clock()
         repository = Repository(
             id=registration.id,
@@ -84,6 +92,13 @@ class RepositoryConfigurationService:
         affects an Analysis already `running`, which already read its
         configuration at its own T1.
         """
+        if change.assigned_policy_id is not None:
+            # Same "must actually be evaluable" guard as register() -- an
+            # update pointing at a nonexistent/unpublished Policy is
+            # rejected here, at configuration time, never discovered later
+            # when an Analysis tries to evaluate against it.
+            self._policy_store.get_current_policy_version(change.assigned_policy_id)
+
         repository = self._repository_config_store.get_repository(repository_id)
         before = {
             "enabledScanners": list(repository.enabled_scanners),

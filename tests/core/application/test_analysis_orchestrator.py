@@ -7,6 +7,7 @@ T1-Failed path -- against Fake RepositoryPort/ScannerPort.
 from __future__ import annotations
 
 import itertools
+import logging
 
 from sentinel.core.application.analysis_orchestrator import AnalysisTrigger, ScannerRuntimeConfig
 from sentinel.core.domain.services.artifact_classification import ChangedFile
@@ -22,6 +23,15 @@ def _sequential_id_factory(prefix: str = "an"):
 
 def _fixed_clock(value: str = "2026-01-01T00:00:00Z"):
     return lambda: value
+
+
+class _CollectingHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
 
 
 def _mode_a_trigger(correlation_id: str = "corr-1", pr_number: int = 42, head_commit_sha: str = "sha-1") -> AnalysisTrigger:
@@ -70,6 +80,76 @@ def test_full_pipeline_produces_a_persisted_pass_verdict(
     assert len(analysis_store.get_findings(analysis_id)) == 1
     assert len(fake_repository_port.published_results) == 1
     assert fake_repository_port.published_results[0].result.verdict == "PASS"
+
+
+def test_t2_commit_is_logged_with_its_own_scanner_execution_id(
+    build_orchestrator, fake_repository_port, fake_scanner_port, policy_store, repository_config_store, analysis_store,
+):
+    """Observability_and_Logging.md: `scannerExecutionId` is present only
+    on lines specific to one Scanner Execution -- this proves the T2
+    commit log line carries it, alongside the same `correlationId`/
+    `analysisId` every other stage of this Analysis carries.
+    """
+    seed_policy_and_repository(policy_store, repository_config_store, policy_rules={"blockOnSeverity": "critical"})
+    fake_repository_port.script_changed_files(
+        "acme/widgets", 42, (ChangedFileRef(path="app.py", change_kind="modified"),)
+    )
+    fake_scanner_port.script_result("semgrep", ScannerRunResult(status="succeeded", exit_code=0))
+
+    orchestrator = build_orchestrator(
+        id_factory=_sequential_id_factory(), clock=_fixed_clock(),
+        scanner_runtime_config={"semgrep": ScannerRuntimeConfig(version="1.70.0", timeout_seconds=120)},
+    )
+
+    root = logging.getLogger()
+    collector = _CollectingHandler()
+    previous_level = root.level
+    root.addHandler(collector)
+    root.setLevel(logging.INFO)
+    try:
+        analysis_id = orchestrator.process(_mode_a_trigger())
+    finally:
+        root.removeHandler(collector)
+        root.setLevel(previous_level)
+
+    t2_records = [r for r in collector.records if getattr(r, "event", None) == "t2_committed"]
+    semgrep_record = next(r for r in t2_records if r.scanner_execution_id == f"{analysis_id}-se-semgrep")
+    assert semgrep_record.analysis_id == analysis_id
+    assert semgrep_record.correlation_id == "corr-1"
+    assert semgrep_record.levelname == "INFO"  # succeeded -- not a degradation
+
+
+def test_t2_commit_for_a_failed_scanner_is_logged_at_warning(
+    build_orchestrator, fake_repository_port, fake_scanner_port, policy_store, repository_config_store,
+):
+    seed_policy_and_repository(policy_store, repository_config_store, policy_rules={"blockOnSeverity": "critical"})
+    fake_repository_port.script_changed_files(
+        "acme/widgets", 42, (ChangedFileRef(path="app.py", change_kind="modified"),)
+    )
+    fake_scanner_port.script_result("semgrep", ScannerRunResult(status="failed", exit_code=1, failure_note="crashed"))
+    fake_scanner_port.script_result("gitleaks", ScannerRunResult(status="succeeded", exit_code=0))
+
+    orchestrator = build_orchestrator(
+        id_factory=_sequential_id_factory(), clock=_fixed_clock(),
+        scanner_runtime_config={"semgrep": ScannerRuntimeConfig(version="1.70.0", timeout_seconds=120)},
+    )
+
+    root = logging.getLogger()
+    collector = _CollectingHandler()
+    previous_level = root.level
+    root.addHandler(collector)
+    root.setLevel(logging.INFO)
+    try:
+        analysis_id = orchestrator.process(_mode_a_trigger())
+    finally:
+        root.removeHandler(collector)
+        root.setLevel(previous_level)
+
+    t2_records = [r for r in collector.records if getattr(r, "event", None) == "t2_committed"]
+    semgrep_record = next(r for r in t2_records if r.scanner_execution_id == f"{analysis_id}-se-semgrep")
+    gitleaks_record = next(r for r in t2_records if r.scanner_execution_id == f"{analysis_id}-se-gitleaks")
+    assert semgrep_record.levelname == "WARNING"  # a scanner failure is expected-but-notable degradation
+    assert gitleaks_record.levelname == "INFO"  # succeeded -- unaffected by the other scanner's failure
 
 
 def test_full_pipeline_blocks_on_a_critical_finding(

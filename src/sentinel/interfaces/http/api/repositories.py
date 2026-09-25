@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from sentinel.core.application.repository_configuration_service import RepositoryConfigurationChange
-from sentinel.core.domain.exceptions import RepositoryMissingPolicy
+from sentinel.core.domain.exceptions import EmptyEnabledScanners, RepositoryMissingPolicy
 from sentinel.interfaces.http.middleware.auth import require_devsecops_session
 from sentinel.shared.errors import ApiError
 
@@ -38,7 +38,7 @@ async def update_repository_config(
         repository = deps.repository_configuration_service.update(repository_id, change, actor=devsecops_login)
     except KeyError:
         raise ApiError(404, "REPOSITORY_NOT_FOUND", f"repository {repository_id!r} not found")
-    except RepositoryMissingPolicy as exc:
+    except (RepositoryMissingPolicy, EmptyEnabledScanners) as exc:
         raise ApiError(400, "INVALID_CONFIGURATION", str(exc))
 
     return {

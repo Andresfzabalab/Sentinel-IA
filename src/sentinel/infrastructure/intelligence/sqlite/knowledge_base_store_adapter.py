@@ -18,6 +18,10 @@ from sentinel.infrastructure.intelligence.sqlite.knowledge_base_store import (
 )
 from sentinel.intelligence.domain.entities import SecurityKnowledgeBaseEntry
 from sentinel.intelligence.domain.exceptions import DuplicateKnowledgeBaseEntry
+from sentinel.shared.logging import get_logger
+from sentinel.shared.retry import retry_best_effort_write
+
+_logger = get_logger("intelligence", "SqliteKnowledgeBaseStoreAdapter")
 
 
 class SqliteKnowledgeBaseStoreAdapter:
@@ -25,12 +29,18 @@ class SqliteKnowledgeBaseStoreAdapter:
         self._store = store
 
     def publish(self, entry: SecurityKnowledgeBaseEntry) -> None:
+        # DuplicateKnowledgeBaseEntry is a logic-level outcome, not a
+        # transient infra failure -- it must propagate immediately,
+        # unretried, so retry_best_effort_write only wraps the transient path.
         try:
-            self._store.publish_entry(
-                KnowledgeBaseEntryCreate(
-                    id=entry.id, topic=entry.topic, version=entry.version,
-                    content=entry.content, source_reference=entry.source_reference, published_at=entry.published_at,
-                )
+            retry_best_effort_write(
+                lambda: self._store.publish_entry(
+                    KnowledgeBaseEntryCreate(
+                        id=entry.id, topic=entry.topic, version=entry.version,
+                        content=entry.content, source_reference=entry.source_reference, published_at=entry.published_at,
+                    )
+                ),
+                logger=_logger, event="knowledge_base_write",
             )
         except SqliteDuplicateKnowledgeBaseEntry as exc:
             raise DuplicateKnowledgeBaseEntry(str(exc)) from exc
